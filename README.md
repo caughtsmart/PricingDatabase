@@ -128,11 +128,16 @@ tested directly: a bug there is invisible until it either hammers Shopify or
 quietly stops syncing everyone.
 
 The queue is [pg-boss](https://github.com/timgit/pg-boss), chosen to avoid
-adding Redis. It runs its SQL through Prisma's existing connection pool via
-pg-boss's Prisma adapter, so the app still opens exactly one pool — worth caring
-about, because managed Postgres connection limits are usually the first thing a
-Shopify app hits. Jobs are durable, retried with backoff, and locked in
-Postgres, so several web instances running the in-process worker is safe.
+adding Redis. Jobs are durable, retried with backoff, and locked in Postgres, so
+several web instances running the in-process worker is safe.
+
+It opens a small dedicated connection pool (`QUEUE_POOL_SIZE`, default 2).
+pg-boss ships a `fromPrisma` adapter that would let it share Prisma's pool, and
+that was tried first — it does not work: pg-boss's internal SQL selects a
+`regclass` column and Prisma's raw-query deserializer rejects that type outright
+(P2010), so `boss.start()` throws. Verified against pg-boss 12.27 and Prisma
+6.19. Keep the pool small; managed Postgres connection limits are usually the
+first ceiling a Shopify app meets.
 
 The queue starts when the server boots (not on first use), because the hourly
 schedule has to be running even on a day nobody opens the app.

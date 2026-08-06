@@ -1,6 +1,5 @@
-import { PgBoss, fromPrisma } from "pg-boss";
+import { PgBoss } from "pg-boss";
 
-import prisma from "./db.server";
 import { evaluateAutoSync } from "./lib/autosync";
 import type { GraphQLClient } from "./lib/catalog.server";
 import {
@@ -56,11 +55,16 @@ async function createBoss(): Promise<PgBoss> {
 
   const boss = new PgBoss({
     connectionString,
-    // Run the queue's SQL through Prisma's existing pool rather than opening a
-    // second one. A Shopify app is usually deployed somewhere with a tight
-    // Postgres connection limit, and two pools per instance is how you find it.
-    db: fromPrisma(prisma),
     schema: "pgboss",
+    // A small dedicated pool rather than sharing Prisma's.
+    //
+    // pg-boss ships a `fromPrisma` adapter that would avoid a second pool, but
+    // it does not work here: pg-boss's internal SQL selects a `regclass`
+    // column, and Prisma's raw-query deserializer rejects that type outright
+    // (P2010), so `boss.start()` throws. Verified against pg-boss 12.27 and
+    // Prisma 6.19. Keep this modest — managed Postgres connection limits are
+    // usually the first ceiling a Shopify app meets.
+    max: Number(process.env.QUEUE_POOL_SIZE || 2),
   });
 
   boss.on("error", (error: Error) => {

@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Lets a run be started by hand from the Actions tab. Useful when a run was
+  # missed — enabling Actions does not retroactively trigger past events, so
+  # without this the only way to get a first run is a throwaway commit.
+  workflow_dispatch:
 
 # A new push to a PR makes the previous run irrelevant.
 concurrency:

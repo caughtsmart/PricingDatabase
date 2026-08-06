@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+type = "ui_extension"
+name = "Margin"
+handle = "margin-block"
+description = "Shows true landed-cost margin on the product details page, and lets you record the cost components Shopify has nowhere to put."
+
+  [[extensions.targeting]]
+  target = "admin.product-details.block.render"
+  module = "./src/ProductMarginBlock.tsx"

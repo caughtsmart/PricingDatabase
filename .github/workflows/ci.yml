@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Lets a run be started by hand from the Actions tab. Useful when a run was
+  # missed — enabling Actions does not retroactively trigger past events, so
+  # without this the only way to get a first run is a throwaway commit.
+  workflow_dispatch:
+
+# A new push to a PR makes the previous run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Prisma needs a datasource URL to generate a client, but never connects for
+  # it. The migrations job overrides this with a real database.
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marginlens?schema=public
+
+jobs:
+  verify:
+    name: Typecheck, test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # pg-boss requires >=22.12; keep this in step with package.json engines.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Generate route types
+        run: npx react-router typegen
+
+      - name: Typecheck app
+        run: npx tsc --noEmit
+
+      - name: Typecheck admin extension
+        # The extension is a separate workspace with its own Preact JSX config,
+        # so the root tsconfig deliberately excludes it.
+        run: npx tsc --noEmit -p extensions/margin-block
+
+      - name: Run tests
+        run: npx vitest run
+
+      - name: Build
+        run: npx react-router build
+
+  migrations:
+    name: Migrations apply and match the schema
+    runs-on: ubuntu-latest
+
+    # Migrations in this repo are written by hand where `prisma migrate dev`
+    # could not run, so "it applies" and "it matches schema.prisma" are separate
+    # claims and both are checked here.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: marginlens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Fail if migrations have drifted from schema.prisma
+        # --exit-code: 0 no difference, 1 error, 2 difference found. A non-empty
+        # diff means the database a fresh deploy produces is not the database
+        # the Prisma client is generated against.
+        run: |
+          npx prisma migrate diff \
+            --from-schema-datasource ./prisma/schema.prisma \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --exit-code
+
+      - name: Check the job queue starts against a real database
+        # pg-boss creates its own schema on start. This caught a real
+        # incompatibility once already, so it is worth a few seconds per run.
+        run: |
+          node --input-type=module -e '
+            import { PgBoss } from "pg-boss";
+            const boss = new PgBoss({
+              connectionString: process.env.DATABASE_URL,
+              schema: "pgboss",
+              max: 2,
+            });
+            await boss.start();
+            await boss.createQueue("margin-lens.sync");
+            await boss.createQueue("margin-lens.nightly");
+            await boss.stop({ graceful: false });
+            console.log("queue OK");
+          '

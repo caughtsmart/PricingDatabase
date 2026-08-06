@@ -5,6 +5,7 @@ import {
   recordComplianceRequest,
 } from "../lib/gdpr.server";
 import { authenticate } from "../shopify.server";
+import { logger } from "../monitoring.server";
 
 interface RedactPayload {
   shop_domain?: string;
@@ -38,8 +39,11 @@ export async function action({ request }: ActionFunctionArgs) {
     "No customer personal data is stored by this app; nothing to erase.",
   );
 
-  // eslint-disable-next-line no-console
-  console.log(`[compliance] ${topic} for ${shop}: no customer data held`);
+  logger.info("Compliance request resolved", {
+    shop,
+    topic,
+    resolution: "no customer data held",
+  });
 
   return new Response();
 }

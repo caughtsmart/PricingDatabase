@@ -147,9 +147,17 @@ Run the worker separately once ingestion starts competing with request latency:
 ```bash
 # web
 RUN_WORKER_IN_PROCESS=false npm start
-# worker
+# worker (needs `npm run build` first — see below)
 npm run worker
 ```
+
+The worker is bundled by `npm run build` into `build/worker/worker.js` and run
+as plain JavaScript. It shares its module graph with the app, which Node's
+type-stripping resolver cannot walk without an explicit `.ts` on every internal
+import — bundling keeps the source clean and puts no TypeScript toolchain in
+production. CI boots the built worker on every run, because typechecking and
+bundling both pass on a graph Node itself cannot resolve; only running it
+catches that.
 
 ## Getting started
 
@@ -225,6 +233,45 @@ Subscription status is read once per navigation in the `app` layout loader and
 shared with child routes via `useRouteLoaderData`, so a page load costs one
 billing query, not three. If that ever shows up in latency, cache it per shop
 with a short TTL.
+
+## Error monitoring
+
+Most of this app's failures happen where nobody is watching. The catalogue sync
+runs from a webhook and a job queue, so a merchant's 03:00 sync can fail with no
+one on the other end of a request. Errors therefore have to be findable after
+the fact.
+
+- **Structured logging.** JSON lines in production, readable text elsewhere.
+  Every line carries the shop it belongs to, so a report can be traced back to a
+  merchant. `console.*` is not used anywhere in app code.
+- **Secrets are redacted before anything is written.** Both by field name
+  (`accessToken`, `authorization`, anything matching `secret`/`token`) and by
+  value shape — Shopify's `shpat_`/`shpca_`/`shppa_`/`shpss_` prefixes and
+  anything shaped like a JWT. This matters because `logger.error("auth failed",
+  { session })` is the line anyone would naturally write, and an offline token
+  is a long-lived credential for a merchant's entire store. Redaction is applied
+  unconditionally rather than left to the caller to remember, and it survives
+  circular references so a log call cannot hang the process.
+- **Sentry, optional.** Set `SENTRY_DSN` and errors are reported there as well;
+  leave it unset and the app runs identically on logs alone. It sits behind an
+  `ErrorReporter` interface so the vendor is swappable, and `beforeSend` re-runs
+  the app's own redaction over the outgoing event — the SDK attaches its own
+  context, so redacting only at the call site would leave a path for a token to
+  reach a third party.
+- **Process-level handlers** for `unhandledRejection` and `uncaughtException`.
+  Without these a rejected promise inside a queue handler is a silent no-op. An
+  uncaught exception exits deliberately so the platform restarts a clean
+  process, which is Node's own default and exists for good reason.
+
+Sync failures are logged as well as written to `SyncRun.errorMessage`: that
+column is only visible to a merchant who happens to open the dashboard, which is
+not the same as reaching whoever operates the app.
+
+One Sentry caveat: its Node SDK prefers being initialised before the modules it
+instruments, via `--import ./instrument.mjs`. Loading it from
+`monitoring.server.ts` means automatic HTTP/database tracing may be incomplete.
+Explicit error reporting — what this app relies on — works fine. Add the
+`--import` hook if you later want tracing too.
 
 ## Tax detection at install
 
@@ -325,9 +372,10 @@ Done:
 - ✅ **Nightly automatic sync** — load-spread across the day, with an opt-out
 - ✅ **Install-time tax detection** — with a confirmation step
 
-Still to do, in rough priority order:
+- ✅ **Error monitoring** — structured logs with redaction, optional Sentry
+
+Still to do:
 
 1. **Configure the actual plans** in the Partner Dashboard, then set
    `BILLING_ENFORCED=true` (see [Billing](#billing))
 2. App listing assets, privacy policy, and a demo store
-3. Error monitoring and structured logging

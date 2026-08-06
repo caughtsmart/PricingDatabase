@@ -119,3 +119,30 @@ jobs:
             await boss.stop({ graceful: false });
             console.log("queue OK");
           '
+
+      - name: Check the standalone worker boots
+        # The worker is a separate entry point that nothing else exercises — it
+        # shipped broken once, because typechecking and bundling both pass on a
+        # module graph that Node itself cannot resolve. Only running it catches
+        # that, so CI runs it.
+        env:
+          NODE_ENV: production
+          # The worker calls the Admin API, so the Shopify config must be
+          # present for it to construct. These values are never used to make a
+          # request; the process is stopped as soon as it reports ready.
+          SHOPIFY_API_KEY: ci-placeholder
+          SHOPIFY_API_SECRET: ci-placeholder
+          SHOPIFY_APP_URL: https://example.com
+          SCOPES: read_products,read_inventory,read_orders
+        run: |
+          npm run build:worker
+          node build/worker/worker.js > worker.log 2>&1 &
+          WORKER_PID=$!
+          for _ in $(seq 1 30); do
+            grep -q '"msg":"Worker ready"' worker.log && break
+            sleep 1
+          done
+          kill -INT "$WORKER_PID" 2>/dev/null || true
+          echo "--- worker output ---"
+          cat worker.log
+          grep -q '"msg":"Worker ready"' worker.log

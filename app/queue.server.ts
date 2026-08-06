@@ -1,6 +1,7 @@
 import { PgBoss } from "pg-boss";
 
 import { evaluateAutoSync } from "./lib/autosync";
+import { logger } from "./monitoring.server";
 import type { GraphQLClient } from "./lib/catalog.server";
 import {
   findAutoSyncCandidates,
@@ -68,8 +69,7 @@ async function createBoss(): Promise<PgBoss> {
   });
 
   boss.on("error", (error: Error) => {
-    // eslint-disable-next-line no-console
-    console.error("[queue] pg-boss error", error);
+    logger.error("Job queue error", { error });
   });
 
   await boss.start();
@@ -141,21 +141,28 @@ export async function runNightlyTick(now = new Date()): Promise<{
         candidate.shop,
       );
       if (result.started) started += 1;
-      // eslint-disable-next-line no-console
-      console.log(`[queue] auto-sync ${candidate.shop}: ${result.message}`);
+      logger.info("Auto-sync considered", {
+        shop: candidate.shop,
+        started: result.started,
+        detail: result.message,
+      });
     } catch (error) {
       failed += 1;
       // Most often an uninstalled shop whose session has not been cleaned up,
       // or a revoked access token.
-      // eslint-disable-next-line no-console
-      console.error(`[queue] auto-sync failed for ${candidate.shop}`, error);
+      logger.error("Auto-sync failed to start", {
+        shop: candidate.shop,
+        error,
+      });
     }
   }
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[queue] nightly tick hour=${currentHourUtc} considered=${candidates.length} started=${started} failed=${failed}`,
-  );
+  logger.info("Auto-sync tick complete", {
+    hourUtc: currentHourUtc,
+    considered: candidates.length,
+    started,
+    failed,
+  });
 
   return { considered: candidates.length, started, failed };
 }
@@ -193,11 +200,21 @@ async function doStartBackgroundJobs(): Promise<void> {
     { batchSize: 1, pollingIntervalSeconds: 2 },
     async (jobs: Array<{ data: SyncJobData }>) => {
       for (const job of jobs) {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[queue] sync ${job.data.syncRunId} for ${job.data.shop}`,
-        );
-        await handleSyncJob(job.data);
+        const jobLogger = logger.child({
+          shop: job.data.shop,
+          syncRunId: job.data.syncRunId,
+        });
+        jobLogger.info("Processing sync job");
+        try {
+          await handleSyncJob(job.data);
+          jobLogger.info("Sync job finished");
+        } catch (error) {
+          // Logged here as well as rethrown: pg-boss will retry, but a job that
+          // exhausts its retries would otherwise fail entirely silently — there
+          // is no request and no user watching a background sync.
+          jobLogger.error("Sync job failed", { error });
+          throw error;
+        }
       }
     },
   );
@@ -221,8 +238,10 @@ async function doStartBackgroundJobs(): Promise<void> {
     singletonKey: NIGHTLY_SCHEDULE_KEY,
   });
 
-  // eslint-disable-next-line no-console
-  console.log("[queue] background jobs started (sync worker + hourly schedule)");
+  logger.info("Background jobs started", {
+    queues: [SYNC_QUEUE, NIGHTLY_QUEUE],
+    schedule: NIGHTLY_CRON,
+  });
 }
 
 /** Backwards-compatible alias. */

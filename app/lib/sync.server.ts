@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 
 import prisma from "../db.server";
+import { logger } from "../monitoring.server";
 import type { AutoSyncCandidate } from "./autosync";
 import {
   BulkOperationError,
@@ -107,12 +108,17 @@ export async function startSync(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not start the sync.";
-    await failRun(run.id, message);
+    await failRun(run.id, message, error);
     return { syncRunId: run.id, started: false, message };
   }
 }
 
-async function failRun(syncRunId: string, message: string) {
+async function failRun(syncRunId: string, message: string, error?: unknown) {
+  // Logged as well as stored. SyncRun.errorMessage is only visible to a
+  // merchant who happens to open the dashboard; a sync that fails at 03:00
+  // needs to reach whoever operates the app, not just the shop it belongs to.
+  logger.error("Sync run failed", { syncRunId, detail: message, error });
+
   await prisma.syncRun.update({
     where: { id: syncRunId },
     data: { status: "error", errorMessage: message, finishedAt: new Date() },
@@ -214,6 +220,7 @@ export async function processSyncRun(
     await failRun(
       syncRunId,
       error instanceof Error ? error.message : "Sync failed during ingest.",
+      error,
     );
     throw error;
   }
@@ -241,6 +248,11 @@ async function startOrdersStage(graphql: GraphQLClient, syncRunId: string) {
       error instanceof BulkOperationError || error instanceof Error
         ? error.message
         : "unknown error";
+    // Not a failed run — the catalogue is already in. Still worth a warning,
+    // because a shop silently missing realised margin looks like a data bug to
+    // the merchant.
+    logger.warn("Sales history stage could not start", { syncRunId, error });
+
     await prisma.syncRun.update({
       where: { id: syncRunId },
       data: {

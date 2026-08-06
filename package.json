@@ -7,7 +7,7 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "react-router build",
+    "build": "react-router build && npm run build:worker",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "deploy": "shopify app deploy",
@@ -20,13 +20,15 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "setup": "prisma generate && prisma migrate deploy",
-    "worker": "node --experimental-strip-types worker.ts"
+    "worker": "node build/worker/worker.js",
+    "build:worker": "vite build --config vite.worker.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
     "@react-router/fs-routes": "^7.18.2",
     "@react-router/node": "^7.18.2",
     "@react-router/serve": "^7.18.2",
+    "@sentry/node": "^10.69.0",
     "@shopify/polaris-types": "^1.0.7",
     "@shopify/shopify-app-react-router": "^1.2.1",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.1",

@@ -1,3 +1,4 @@
+import { logger } from "../monitoring.server";
 import type { GraphQLClient } from "./catalog.server";
 
 /**
@@ -210,8 +211,7 @@ export async function getSubscriptionStatus(
     // A billing lookup failing is not a reason to take the app down. Report no
     // subscription; enforcement is opt-in, so the default outcome is a banner
     // rather than a lockout.
-    // eslint-disable-next-line no-console
-    console.error("[billing] Could not read subscription status", error);
+    logger.error("Could not read subscription status", { error });
     return { ...NO_SUBSCRIPTION };
   }
 }

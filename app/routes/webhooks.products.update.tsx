@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { logger } from "../monitoring.server";
 
 interface ProductWebhookPayload {
   id: number;
@@ -36,8 +37,7 @@ function parseMoney(value: string | null | undefined): number | null {
  */
 export async function action({ request }: ActionFunctionArgs) {
   const { shop, topic, payload } = await authenticate.webhook(request);
-  // eslint-disable-next-line no-console
-  console.log(`Received ${topic} webhook for ${shop}`);
+  logger.info("Webhook received", { shop, topic });
 
   const product = payload as unknown as ProductWebhookPayload;
   if (!product?.id || !product.variants?.length) return new Response();

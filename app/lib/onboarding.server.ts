@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+import { logger } from "../monitoring.server";
 import type { GraphQLClient } from "./catalog.server";
 import {
   deriveTaxDefaults,
@@ -54,8 +55,7 @@ export async function fetchShopTaxProfile(
       currencyCode: shop.currencyCode ?? null,
     };
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("[onboarding] Could not read shop tax profile", error);
+    logger.error("Could not read shop tax profile", { error });
     return null;
   }
 }
@@ -110,10 +110,13 @@ export async function applyDetectedDefaults(
     update: data,
   });
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[onboarding] ${shop}: taxesIncluded=${defaults.pricesIncludeTax} rate=${defaults.taxRatePct} country=${defaults.countryCode ?? "unknown"}`,
-  );
+  logger.info("Detected shop tax setup", {
+    shop,
+    pricesIncludeTax: defaults.pricesIncludeTax,
+    taxRatePct: defaults.taxRatePct,
+    countryCode: defaults.countryCode,
+    needsRateConfirmation: defaults.needsRateConfirmation,
+  });
 
   return { applied: true, reason: "applied", defaults };
 }

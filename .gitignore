@@ -1,0 +1,17 @@
+node_modules
+build
+.cache
+.env
+.env.*
+!.env.example
+.react-router
+*.tsbuildinfo
+
+# Local SQLite dev database
+prisma/*.db
+prisma/*.db-journal
+prisma/dev.sqlite*
+
+# Shopify CLI
+.shopify
+extensions/**/dist

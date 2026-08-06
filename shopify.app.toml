@@ -1,0 +1,51 @@
+# Learn more: https://shopify.dev/docs/apps/tools/cli/configuration
+#
+# `client_id` and `application_url` are filled in by `shopify app config link`
+# / `shopify app dev`. They are intentionally left blank in source control.
+name = "Margin Lens"
+handle = "margin-lens"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
+
+[access_scopes]
+# read_products         -> product/variant price + title
+# write_products        -> write the app-owned COGS metafield back to variants
+# read_inventory        -> InventoryItem.unitCost (Shopify's "Cost per item")
+# write_inventory       -> let merchants correct unit cost from the widget
+# read_orders           -> realised margin on the dashboard
+scopes = "read_products,write_products,read_inventory,write_inventory,read_orders"
+
+[auth]
+redirect_urls = [
+  "https://example.com/auth/callback",
+  "https://example.com/auth/shopify/callback",
+  "https://example.com/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  # Keep the cached catalog in step with price/cost edits made anywhere in the
+  # admin, so the dashboard does not drift between manual syncs.
+  [[webhooks.subscriptions]]
+  topics = [ "products/update" ]
+  uri = "/webhooks/products/update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "products/delete" ]
+  uri = "/webhooks/products/delete"
+
+[pos]
+embedded = false

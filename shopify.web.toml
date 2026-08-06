@@ -1,0 +1,7 @@
+name = "margin-lens-web"
+roles = ["backend", "frontend"]
+webhooks_path = "/webhooks"
+
+[commands]
+predev = "npx prisma migrate deploy"
+dev = "npm exec react-router vite:dev"

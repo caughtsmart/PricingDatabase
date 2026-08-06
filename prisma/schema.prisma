@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Shopify OAuth sessions, managed by @shopify/shopify-app-session-storage-prisma.
+/// The shape of this model is dictated by that package — do not rename fields.
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+
+  @@index([shop])
+}
+
+/// Per-shop configuration. One row per installed shop.
+model ShopSettings {
+  shop String @id
+
+  currencyCode String @default("GBP")
+
+  /// True when displayed prices already include tax (the norm in the UK/EU).
+  /// Drives whether the engine divides tax out before computing margin.
+  pricesIncludeTax Boolean @default(true)
+  taxRatePct       Decimal @default(20) @db.Decimal(6, 3)
+
+  /// Margin thresholds, in percentage points of net revenue.
+  targetMarginPct   Decimal @default(35) @db.Decimal(6, 3)
+  warnMarginPct     Decimal @default(20) @db.Decimal(6, 3)
+  criticalMarginPct Decimal @default(10) @db.Decimal(6, 3)
+
+  /// Set once the default cost rules have been seeded, so we never re-seed
+  /// over a merchant who has deliberately deleted them.
+  defaultsSeeded Boolean @default(false)
+
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  costRules CostRule[]
+}
+
+enum CostRuleKind {
+  /// A percentage of net (tax-exclusive) revenue, e.g. a payment processing fee.
+  PERCENT_OF_REVENUE
+  /// A flat amount per unit sold, e.g. pick-and-pack labour.
+  FIXED_PER_UNIT
+}
+
+/// Shop-wide costs that apply to every sale, on top of per-variant landed cost.
+model CostRule {
+  id   String @id @default(cuid())
+  shop String
+
+  name  String
+  kind  CostRuleKind
+  /// Percentage points for PERCENT_OF_REVENUE, currency amount for FIXED_PER_UNIT.
+  value Decimal      @db.Decimal(12, 4)
+
+  enabled   Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings ShopSettings @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@index([shop, enabled])
+}
+
+/// Per-variant cost components the merchant adds on top of Shopify's unit cost.
+///
+/// Shopify's own `InventoryItem.unitCost` stays the source of truth for supplier
+/// price; this table only holds the extras Shopify has nowhere to put.
+model VariantCost {
+  id   String @id @default(cuid())
+  shop String
+
+  /// Numeric portion of the Shopify GID, e.g. "45678901234567".
+  variantId String
+  productId String
+
+  freight   Decimal @default(0) @db.Decimal(12, 4)
+  duty      Decimal @default(0) @db.Decimal(12, 4)
+  packaging Decimal @default(0) @db.Decimal(12, 4)
+  handling  Decimal @default(0) @db.Decimal(12, 4)
+  other     Decimal @default(0) @db.Decimal(12, 4)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, variantId])
+  @@index([shop, productId])
+}
+
+/// A cached copy of catalogue facts needed for dashboard rollups.
+///
+/// Aggregating across a catalogue by paging the Admin API on every dashboard
+/// load would be far too slow and would burn through the rate limit, so the
+/// catalogue is synced into this table and read locally.
+model VariantSnapshot {
+  id   String @id @default(cuid())
+  shop String
+
+  variantId String
+  productId String
+
+  productTitle String
+  variantTitle String?
+  sku          String?
+  vendor       String?
+  productType  String?
+  status       String?
+  imageUrl     String?
+
+  price           Decimal  @db.Decimal(12, 4)
+  compareAtPrice  Decimal? @db.Decimal(12, 4)
+  /// Shopify's "Cost per item". Null when the merchant has not set one.
+  unitCost        Decimal? @db.Decimal(12, 4)
+  inventoryQuantity Int    @default(0)
+
+  /// Units sold in the trailing reporting window, used for realised margin.
+  unitsSold Int @default(0)
+
+  syncedAt DateTime @default(now())
+
+  @@unique([shop, variantId])
+  @@index([shop, productId])
+  @@index([shop, vendor])
+}
+
+/// Audit trail for catalogue syncs, so the UI can report progress and failures.
+model SyncRun {
+  id   String @id @default(cuid())
+  shop String
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  /// "running" | "success" | "error"
+  status     String    @default("running")
+
+  variantsSynced Int     @default(0)
+  errorMessage   String?
+
+  @@index([shop, startedAt])
+}

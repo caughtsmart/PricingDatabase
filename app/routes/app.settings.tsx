@@ -1,5 +1,13 @@
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+  useRouteLoaderData,
+} from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+
+import type { loader as appLoader } from "./app";
 
 import { formatPercent, parseNumber } from "../lib/format";
 import type { CostRuleKind } from "../lib/margin";
@@ -15,6 +23,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const config = await getShopConfig(session.shop);
 
+  // Subscription state comes from the parent `app` route's loader — no need to
+  // ask Shopify twice on one page load.
   return {
     settings: config.settings,
     rules: config.rules,
@@ -100,6 +110,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function Settings() {
   const { settings, rules, currencyCode } = useLoaderData<typeof loader>();
+  const app = useRouteLoaderData<typeof appLoader>("routes/app");
+  const subscription = app?.subscription;
+  const planUrl = app?.planUrl;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state === "submitting";
@@ -111,6 +124,39 @@ export default function Settings() {
           <s-banner tone={actionData.ok ? "success" : "critical"}>
             <s-paragraph>{actionData.message}</s-paragraph>
           </s-banner>
+        </s-section>
+      ) : null}
+
+      {subscription && planUrl ? (
+        <s-section heading="Plan">
+          <s-stack direction="block" gap="small-400">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-badge tone={subscription.active ? "success" : "neutral"}>
+                {subscription.active
+                  ? (subscription.planName ?? "Subscribed")
+                  : "Free"}
+              </s-badge>
+              {subscription.price ? (
+                <s-text color="subdued">
+                  {subscription.price.amount} {subscription.price.currencyCode} per{" "}
+                  {subscription.price.interval === "ANNUAL" ? "year" : "30 days"}
+                </s-text>
+              ) : null}
+              {subscription.test ? <s-badge tone="warning">Test</s-badge> : null}
+            </s-stack>
+            {subscription.currentPeriodEnd ? (
+              <s-text color="subdued">
+                Renews{" "}
+                {new Date(subscription.currentPeriodEnd).toLocaleDateString(
+                  "en-GB",
+                )}
+              </s-text>
+            ) : null}
+            {/* target="_top" breaks out of the app iframe into the admin. */}
+            <s-link href={planUrl} target="_top">
+              {subscription.active ? "Change plan" : "See plans"}
+            </s-link>
+          </s-stack>
         </s-section>
       ) : null}
 

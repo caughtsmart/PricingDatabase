@@ -148,6 +148,34 @@ model VariantSnapshot {
   @@index([shop, vendor])
 }
 
+/// Audit trail for Shopify's mandatory privacy webhooks.
+///
+/// App Review asks how compliance requests are handled, and the regulations
+/// give a 30-day window to act. Recording each request — and what was done
+/// about it — is how that gets evidenced later.
+///
+/// Deliberately stores no personal data itself: only the Shopify-assigned
+/// identifiers already present in the webhook, never names, emails or phones.
+model ComplianceRequest {
+  id   String @id @default(cuid())
+  shop String
+
+  /// "customers/data_request" | "customers/redact" | "shop/redact"
+  topic String
+
+  /// Shopify's customer id, when the topic concerns one customer.
+  customerId String?
+  /// Order ids named in a data request payload.
+  orderIds   String?
+
+  receivedAt  DateTime  @default(now())
+  completedAt DateTime?
+  /// What the app did, e.g. "no customer data held" or "purged 412 rows".
+  resolution  String?
+
+  @@index([shop, topic])
+}
+
 /// Audit trail for catalogue syncs, so the UI can report progress and failures.
 model SyncRun {
   id   String @id @default(cuid())

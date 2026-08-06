@@ -101,6 +101,76 @@ npm run build       # production build
 npm run deploy      # push app config + extensions to Shopify
 ```
 
+## Billing
+
+Uses **Shopify App Pricing** (what used to be called Managed Pricing). Plans are
+defined in the Partner Dashboard app listing, not in code — Shopify hosts the
+plan selection page and handles charges, trials, proration and price changes.
+There is deliberately no `billing` block in `shopify.server.ts`: mixing App
+Pricing with the Billing API is not supported.
+
+The app does two things (`app/lib/billing.server.ts`):
+
+1. **Checks the current shop's subscription** via
+   `currentAppInstallation.activeSubscriptions` on the Admin API. Shopify's docs
+   point at the Partner API's Active Subscription endpoint, but that needs an
+   organisation-level token an embedded per-shop request does not have. The
+   Admin API answers the same question for the shop in front of us using the
+   session we already hold. Reach for the Partner API when you need state that
+   survives uninstall, or a billing event history.
+2. **Links to the hosted plan page** at
+   `https://admin.shopify.com/store/{store}/charges/{app-handle}/pricing_plans`,
+   always with `target="_top"` — the app is in an iframe and cannot navigate the
+   admin's parent window otherwise.
+
+### Turning enforcement on
+
+Enforcement is **off by default**, controlled by `BILLING_ENFORCED=true`. This
+is deliberate: plans live in the Partner Dashboard, so enforcing before they
+exist would redirect merchants — and you, in development — to an empty plan
+page. The order is:
+
+1. Set up plans in Partner Dashboard → Distribution → Manage listing → Pricing
+2. Verify the plan page loads from the **See plans** link in Settings
+3. Set `BILLING_ENFORCED=true`
+
+While it is off, unsubscribed merchants get a dismissable prompt on the
+dashboard and full access. With it on, the check in `app/routes/app.tsx` gates
+every page beneath the layout.
+
+Subscription status is read once per navigation in the `app` layout loader and
+shared with child routes via `useRouteLoaderData`, so a page load costs one
+billing query, not three. If that ever shows up in latency, cache it per shop
+with a short TTL.
+
+## Privacy and GDPR
+
+The three mandatory compliance webhooks are implemented and wired up in
+`shopify.app.toml` (note they use `compliance_topics`, not `topics`).
+
+**This app stores no customer personal data.** That is not a convenient
+assertion — it falls out of the design. The sales query behind realised margin
+selects only `lineItems { quantity, variant { id } }`; no customer, name, email
+or address field is ever requested, and `VariantSnapshot` keeps a single integer
+per variant. `Session` holds merchant *staff* details for online sessions, which
+is staff data, not customer data.
+
+| Topic | What happens |
+|---|---|
+| `customers/data_request` | Logged and closed — nothing to disclose |
+| `customers/redact` | Logged and closed — nothing to erase |
+| `shop/redact` | Purges every row for that shop, in one transaction |
+
+Each request is recorded in a `ComplianceRequest` row with what was done about
+it, so the "we hold nothing" answer can be evidenced during App Review rather
+than merely claimed. Those rows deliberately store only Shopify's own
+identifiers — never the name, email or phone that arrives in the payload.
+
+Note the split between uninstall and redaction: `app/uninstalled` keeps the
+merchant's cost data in case they reinstall, because re-entering every landed
+cost would be punishing. `shop/redact` arrives 48 hours later if the data really
+must go, and deletes everything.
+
 ## Scopes
 
 | Scope | Why |
@@ -132,13 +202,17 @@ These are deliberate v1 boundaries, not oversights:
 
 ## Before submitting to the App Store
 
-Not yet done, in rough priority order:
+Done:
 
-1. **Billing** — `shopify.billing` with a plan, or Shopify managed pricing
-2. **GDPR webhooks** — `customers/data_request`, `customers/redact`,
-   `shop/redact` are mandatory for listing
-3. Move sync to a background job so large stores do not time out
-4. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
+- ✅ **Billing** — Shopify App Pricing, enforcement behind a flag
+- ✅ **GDPR webhooks** — all three mandatory topics, with an audit trail
+
+Still to do, in rough priority order:
+
+1. **Configure the actual plans** in the Partner Dashboard, then set
+   `BILLING_ENFORCED=true` (see [Billing](#billing))
+2. Move sync to a background job so large stores do not time out
+3. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
    setting instead of defaulting to UK VAT
-5. App listing assets, privacy policy, and a demo store
-6. Error monitoring and structured logging
+4. App listing assets, privacy policy, and a demo store
+5. Error monitoring and structured logging

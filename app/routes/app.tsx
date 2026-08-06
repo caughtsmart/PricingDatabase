@@ -3,11 +3,33 @@ import type { LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
+import {
+  getSubscriptionStatus,
+  isBillingEnforced,
+  planSelectionUrl,
+} from "../lib/billing.server";
+import type { GraphQLClient } from "../lib/catalog.server";
 import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  const { admin, session, redirect } = await authenticate.admin(request);
+
+  const subscription = await getSubscriptionStatus(admin.graphql as GraphQLClient);
+  const planUrl = planSelectionUrl(session.shop);
+
+  // Gating lives in the layout so it applies to every page underneath, however
+  // the merchant arrived. `target: "_top"` is required: the app runs in an
+  // iframe and cannot navigate the admin's parent window on its own.
+  if (!subscription.active && isBillingEnforced()) {
+    throw redirect(planUrl, { target: "_top" });
+  }
+
+  return {
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    subscription,
+    planUrl,
+    billingEnforced: isBillingEnforced(),
+  };
 }
 
 export default function AppLayout() {

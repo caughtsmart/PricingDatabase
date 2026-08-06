@@ -1,5 +1,13 @@
-import { Form, Link, useLoaderData, useNavigation } from "react-router";
+import {
+  Form,
+  Link,
+  useLoaderData,
+  useNavigation,
+  useRouteLoaderData,
+} from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+
+import type { loader as appLoader } from "./app";
 
 import { syncCatalog, type GraphQLClient } from "../lib/catalog.server";
 import { formatMoney, formatPercent, statusLabel, statusTone } from "../lib/format";
@@ -74,14 +82,44 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
+  // Reuse the layout's billing lookup rather than querying Shopify again.
+  const app = useRouteLoaderData<typeof appLoader>("routes/app");
   const navigation = useNavigation();
   const syncing = navigation.state === "submitting";
 
   const money = (value: number) => formatMoney(value, data.currencyCode);
   const neverSynced = data.lastSyncedAt === null;
 
+  // With enforcement on, an unsubscribed merchant is redirected before this
+  // renders, so the prompt only appears while the app is running free.
+  const showUpgradePrompt =
+    app !== undefined && !app.subscription.active && !app.billingEnforced;
+
   return (
     <s-page heading="Margin dashboard">
+      {showUpgradePrompt ? (
+        <s-section>
+          <s-banner tone="info" heading="You're on the free plan">
+            <s-paragraph>
+              Margin Lens is running without a subscription.{" "}
+              <s-link href={app.planUrl} target="_top">
+                See plans
+              </s-link>
+            </s-paragraph>
+          </s-banner>
+        </s-section>
+      ) : null}
+
+      {app?.subscription.test ? (
+        <s-section>
+          <s-banner tone="warning" heading="Test charge">
+            <s-paragraph>
+              This shop is on a test subscription, so no money is changing hands.
+            </s-paragraph>
+          </s-banner>
+        </s-section>
+      ) : null}
+
       <s-section>
         <s-stack direction="inline" gap="base" alignItems="center">
           <s-paragraph>

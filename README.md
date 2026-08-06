@@ -65,8 +65,57 @@ server-side only, so the widget and the dashboard cannot drift apart.
 
 The dashboard reads a local `VariantSnapshot` cache rather than the Admin API —
 paging a whole catalogue on each page load would be slow and would burn the rate
-limit. The cache is refreshed by the **Sync catalogue** button and kept current
+limit. The cache is filled by the background sync below, and kept current
 between syncs by `products/update` and `products/delete` webhooks.
+
+## Background sync
+
+Syncing runs on Shopify's **Bulk Operations API** and a Postgres-backed job
+queue, so clicking **Sync catalogue** returns immediately no matter how large
+the store is.
+
+```
+startSync()   submits the catalogue bulk query, returns at once
+Shopify       runs it, then sends bulk_operations/finish
+webhook       matches it to the run and queues an ingest job
+worker        streams the JSONL in, upserts, submits the orders query
+webhook       fires again; the worker ingests sales and finalises the run
+```
+
+Catalogue and sales run in sequence rather than together because Shopify permits
+only one bulk *query* per shop at a time. The dashboard polls while a run is in
+flight and stops as soon as it is not.
+
+Three details worth knowing if you touch this code:
+
+- **Ingest is a stamp-and-sweep, not a wipe-and-replace.** A streamed import
+  cannot wrap "delete everything, insert everything" in one transaction without
+  holding the whole catalogue in memory. Each row is stamped with the
+  `lastSeenSyncId` that wrote it, and rows still carrying an older stamp are
+  deleted at the end — so the dashboard never shows a half-empty catalogue, and
+  products deleted in Shopify still disappear.
+- **The webhook does almost nothing.** It matches the operation to its run and
+  enqueues. A webhook that takes minutes gets retried, which would mean several
+  ingests racing each other.
+- **A failure in the sales stage does not fail the run.** The catalogue is
+  already in by then; losing correct product margins because sales history
+  stumbled would be the wrong trade. The run completes with a note instead.
+
+The queue is [pg-boss](https://github.com/timgit/pg-boss), chosen to avoid
+adding Redis. It runs its SQL through Prisma's existing connection pool via
+pg-boss's Prisma adapter, so the app still opens exactly one pool — worth caring
+about, because managed Postgres connection limits are usually the first thing a
+Shopify app hits. Jobs are durable, retried with backoff, and locked in
+Postgres, so several web instances running the in-process worker is safe.
+
+Run the worker separately once ingestion starts competing with request latency:
+
+```bash
+# web
+RUN_WORKER_IN_PROCESS=false npm start
+# worker
+npm run worker
+```
 
 ## Getting started
 
@@ -185,15 +234,9 @@ must go, and deletes everything.
 
 These are deliberate v1 boundaries, not oversights:
 
-- **Catalogue sync caps at 20,000 variants** (200 pages × 100). Beyond that the
-  UI says so explicitly rather than silently truncating; the fix is the Bulk
-  Operations API.
-- **Realised margin scans up to 5,000 recent orders** (100 pages × 50) over a
-  90-day window.
-- **Sync is synchronous**, driven by a button. A large catalogue will hold the
-  request open. A background job queue is the natural next step.
 - **The products table sends at most 500 rows** to the browser and filters
   client-side.
+- **Realised margin covers a fixed 90-day window.** Not yet configurable.
 - **Costs are current, not historical.** Realised profit uses today's costs
   against past unit sales, so it is a good approximation rather than true
   period-accurate COGS. Cost snapshotting at order time is the fix.
@@ -207,11 +250,13 @@ Done:
 - ✅ **Billing** — Shopify App Pricing, enforcement behind a flag
 - ✅ **GDPR webhooks** — all three mandatory topics, with an audit trail
 
+- ✅ **Background sync** — bulk operations plus a job queue, no catalogue cap
+
 Still to do, in rough priority order:
 
 1. **Configure the actual plans** in the Partner Dashboard, then set
    `BILLING_ENFORCED=true` (see [Billing](#billing))
-2. Move sync to a background job so large stores do not time out
+2. Schedule a nightly sync so merchants do not have to press the button
 3. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
    setting instead of defaulting to UK VAT
 4. App listing assets, privacy policy, and a demo store

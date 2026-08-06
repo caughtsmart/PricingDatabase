@@ -141,11 +141,21 @@ model VariantSnapshot {
   /// Units sold in the trailing reporting window, used for realised margin.
   unitsSold Int @default(0)
 
+  /// The SyncRun that last wrote this row.
+  ///
+  /// A bulk import streams in batches, so it cannot wrap "delete everything,
+  /// then insert everything" in one transaction without holding the whole
+  /// catalogue in memory. Instead each row is stamped with the run that touched
+  /// it, and rows left carrying an older stamp are swept at the end. The
+  /// dashboard therefore never sees a half-empty catalogue.
+  lastSeenSyncId String?
+
   syncedAt DateTime @default(now())
 
   @@unique([shop, variantId])
   @@index([shop, productId])
   @@index([shop, vendor])
+  @@index([shop, lastSeenSyncId])
 }
 
 /// Audit trail for Shopify's mandatory privacy webhooks.
@@ -176,18 +186,41 @@ model ComplianceRequest {
   @@index([shop, topic])
 }
 
-/// Audit trail for catalogue syncs, so the UI can report progress and failures.
+/// A catalogue sync, and the state machine that drives it.
+///
+/// Syncs run through Shopify's Bulk Operations API: the app submits a query,
+/// Shopify runs it asynchronously and sends `bulk_operations/finish`, then the
+/// app downloads the JSONL result. Because catalogue and orders cannot run at
+/// the same time (Shopify allows one bulk query per shop), one run moves
+/// through both stages in sequence:
+///
+///   queued -> running(catalog) -> ingesting(catalog)
+///          -> running(orders)  -> ingesting(orders) -> success
+///
+/// Any stage can end in `error`.
 model SyncRun {
   id   String @id @default(cuid())
   shop String
 
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
-  /// "running" | "success" | "error"
-  status     String    @default("running")
 
-  variantsSynced Int     @default(0)
-  errorMessage   String?
+  /// "queued" | "running" | "ingesting" | "success" | "error" | "cancelled"
+  status String @default("queued")
+  /// Which half of the run is in flight: "catalog" | "orders"
+  stage  String @default("catalog")
+
+  /// The Shopify BulkOperation GID currently being awaited, used to match the
+  /// finish webhook back to this run.
+  bulkOperationId String?
+
+  variantsSynced Int @default(0)
+  ordersScanned  Int @default(0)
+  /// Shopify's running count of objects processed, for progress display.
+  objectCount    Int @default(0)
+
+  errorMessage String?
 
   @@index([shop, startedAt])
+  @@index([bulkOperationId])
 }

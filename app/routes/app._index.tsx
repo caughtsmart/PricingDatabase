@@ -1,22 +1,28 @@
+import { useEffect } from "react";
 import {
   Form,
   Link,
   useLoaderData,
   useNavigation,
+  useRevalidator,
   useRouteLoaderData,
 } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import type { loader as appLoader } from "./app";
 
-import { syncCatalog, type GraphQLClient } from "../lib/catalog.server";
+import type { GraphQLClient } from "../lib/catalog.server";
 import { formatMoney, formatPercent, statusLabel, statusTone } from "../lib/format";
 import { breakdownByVendor, buildRollup } from "../lib/rollup.server";
+import { cancelSync, getLatestSyncRun, startSync } from "../lib/sync.server";
 import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
-  const rollup = await buildRollup(session.shop);
+  const [rollup, syncRun] = await Promise.all([
+    buildRollup(session.shop),
+    getLatestSyncRun(session.shop),
+  ]);
 
   // Worst first: the merchant opens this page to find what is bleeding money,
   // not to admire the healthy lines.
@@ -38,6 +44,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ? rollup.lastSyncedAt.toISOString()
       : null,
     targetMarginPct: rollup.targetMarginPct,
+    syncRun: syncRun
+      ? {
+          id: syncRun.id,
+          status: syncRun.status,
+          stage: syncRun.stage,
+          objectCount: syncRun.objectCount,
+          variantsSynced: syncRun.variantsSynced,
+          ordersScanned: syncRun.ordersScanned,
+          errorMessage: syncRun.errorMessage,
+        }
+      : null,
     vendors: breakdownByVendor(rollup.lines).slice(0, 8),
     attention: attention.map((line) => ({
       variantId: line.variantId,
@@ -60,24 +77,42 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const graphql = admin.graphql as GraphQLClient;
 
-  try {
-    const result = await syncCatalog(
-      admin.graphql as GraphQLClient,
-      session.shop,
-    );
+  if (String(formData.get("intent")) === "cancel") {
+    const cancelled = await cancelSync(graphql, session.shop);
     return {
-      ok: true,
-      message: result.truncated
-        ? `Synced the first ${result.variantsSynced} variants. This catalogue is large enough to need a bulk import — everything beyond that limit was not included.`
-        : `Synced ${result.variantsSynced} variants across ${result.ordersScanned} recent orders.`,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Sync failed.",
+      ok: cancelled,
+      message: cancelled ? "Sync cancelled." : "There was no sync to cancel.",
     };
   }
+
+  // Returns as soon as Shopify accepts the bulk query — the import itself
+  // happens in the background, driven by the finish webhook.
+  const result = await startSync(graphql, session.shop);
+  return { ok: result.started, message: result.message };
+}
+
+type SyncRunState = NonNullable<
+  Awaited<ReturnType<typeof loader>>["syncRun"]
+>;
+
+const IN_FLIGHT_STATUSES = ["queued", "running", "ingesting"];
+
+function syncProgressLabel(run: SyncRunState): string {
+  const stage =
+    run.stage === "orders" ? "Reading sales history" : "Reading catalogue";
+
+  if (run.status === "queued") return "Waiting for Shopify to start the export…";
+  if (run.status === "ingesting") {
+    return run.stage === "orders"
+      ? "Importing sales history…"
+      : "Importing catalogue…";
+  }
+  return run.objectCount > 0
+    ? `${stage}: ${run.objectCount.toLocaleString("en-GB")} records so far…`
+    : `${stage}…`;
 }
 
 export default function Dashboard() {
@@ -85,7 +120,23 @@ export default function Dashboard() {
   // Reuse the layout's billing lookup rather than querying Shopify again.
   const app = useRouteLoaderData<typeof appLoader>("routes/app");
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const syncing = navigation.state === "submitting";
+
+  const syncInFlight = Boolean(
+    data.syncRun && IN_FLIGHT_STATUSES.includes(data.syncRun.status),
+  );
+
+  // A sync finishes on a webhook, not in response to anything the browser did,
+  // so the page has to ask. Polling only runs while something is actually in
+  // flight, and stops as soon as it is not.
+  useEffect(() => {
+    if (!syncInFlight) return;
+    const timer = setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [syncInFlight, revalidator]);
 
   const money = (value: number) => formatMoney(value, data.currencyCode);
   const neverSynced = data.lastSyncedAt === null;
@@ -121,17 +172,52 @@ export default function Dashboard() {
       ) : null}
 
       <s-section>
-        <s-stack direction="inline" gap="base" alignItems="center">
-          <s-paragraph>
-            {neverSynced
-              ? "Run a sync to pull your catalogue in and start seeing margins."
-              : `Last synced ${new Date(data.lastSyncedAt!).toLocaleString("en-GB")}.`}
-          </s-paragraph>
-          <Form method="post">
-            <s-button variant="primary" type="submit" disabled={syncing}>
-              {syncing ? "Syncing…" : "Sync catalogue"}
-            </s-button>
-          </Form>
+        <s-stack direction="block" gap="small-400">
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-paragraph>
+              {neverSynced
+                ? "Run a sync to pull your catalogue in and start seeing margins."
+                : `Last synced ${new Date(data.lastSyncedAt!).toLocaleString("en-GB")}.`}
+            </s-paragraph>
+            <Form method="post">
+              <s-button
+                variant="primary"
+                type="submit"
+                disabled={syncing || syncInFlight}
+              >
+                {syncInFlight ? "Syncing…" : "Sync catalogue"}
+              </s-button>
+            </Form>
+            {syncInFlight ? (
+              <Form method="post">
+                <input type="hidden" name="intent" value="cancel" />
+                <s-button variant="secondary" type="submit">
+                  Cancel
+                </s-button>
+              </Form>
+            ) : null}
+          </s-stack>
+
+          {syncInFlight ? (
+            <s-stack direction="inline" gap="small-400" alignItems="center">
+              <s-spinner />
+              <s-text color="subdued">{syncProgressLabel(data.syncRun!)}</s-text>
+            </s-stack>
+          ) : null}
+
+          {data.syncRun?.status === "error" ? (
+            <s-banner tone="critical" heading="Last sync failed">
+              <s-paragraph>
+                {data.syncRun.errorMessage ?? "Something went wrong."}
+              </s-paragraph>
+            </s-banner>
+          ) : null}
+
+          {data.syncRun?.status === "success" && data.syncRun.errorMessage ? (
+            <s-banner tone="warning" heading="Partly synced">
+              <s-paragraph>{data.syncRun.errorMessage}</s-paragraph>
+            </s-banner>
+          ) : null}
         </s-stack>
       </s-section>
 

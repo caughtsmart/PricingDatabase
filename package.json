@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=20.10"
+    "node": ">=22.12"
   },
   "scripts": {
     "build": "react-router build",
@@ -19,7 +19,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "setup": "prisma generate && prisma migrate deploy"
+    "setup": "prisma generate && prisma migrate deploy",
+    "worker": "node --experimental-strip-types worker.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
@@ -30,6 +31,7 @@
     "@shopify/shopify-app-react-router": "^1.2.1",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.1",
     "isbot": "^5.1.31",
+    "pg-boss": "^12.27.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router": "^7.18.2"

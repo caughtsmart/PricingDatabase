@@ -6,6 +6,7 @@ import {
   type AggregateTotals,
   type MarginResult,
 } from "./margin";
+import { describeDetection } from "./onboarding";
 import { getShopConfig, toNullableNumber, toNumber } from "./settings.server";
 
 export interface RollupLine {
@@ -30,6 +31,10 @@ export interface Rollup {
   currencyCode: string;
   lastSyncedAt: Date | null;
   targetMarginPct: number;
+  onboardedAt: Date | null;
+  needsRateConfirmation: boolean;
+  /** Plain-English summary of the detected tax setup, for the onboarding banner. */
+  detectionSummary: string;
 }
 
 /**
@@ -94,6 +99,15 @@ export async function buildRollup(shop: string): Promise<Rollup> {
     currencyCode: config.currencyCode,
     lastSyncedAt: config.lastSyncedAt,
     targetMarginPct: config.settings.targetMarginPct,
+    onboardedAt: config.onboardedAt,
+    needsRateConfirmation: config.needsRateConfirmation,
+    detectionSummary: describeDetection({
+      pricesIncludeTax: config.settings.pricesIncludeTax,
+      taxRatePct: config.settings.taxRatePct,
+      currencyCode: config.currencyCode,
+      countryCode: config.detectedCountryCode,
+      needsRateConfirmation: config.needsRateConfirmation,
+    }),
   };
 }
 

@@ -13,6 +13,7 @@ import type { loader as appLoader } from "./app";
 
 import type { GraphQLClient } from "../lib/catalog.server";
 import { formatMoney, formatPercent, statusLabel, statusTone } from "../lib/format";
+import { markOnboarded } from "../lib/onboarding.server";
 import { breakdownByVendor, buildRollup } from "../lib/rollup.server";
 import { cancelSync, getLatestSyncRun, startSync } from "../lib/sync.server";
 import { authenticate } from "../shopify.server";
@@ -40,6 +41,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return {
     totals: rollup.totals,
     currencyCode: rollup.currencyCode,
+    onboarding: {
+      confirmed: rollup.onboardedAt !== null,
+      needsRateConfirmation: rollup.needsRateConfirmation,
+      summary: rollup.detectionSummary,
+    },
     lastSyncedAt: rollup.lastSyncedAt
       ? rollup.lastSyncedAt.toISOString()
       : null,
@@ -79,6 +85,11 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const graphql = admin.graphql as GraphQLClient;
+
+  if (String(formData.get("intent")) === "confirm-tax") {
+    await markOnboarded(session.shop);
+    return { ok: true, message: "Tax settings confirmed." };
+  }
 
   if (String(formData.get("intent")) === "cancel") {
     const cancelled = await cancelSync(graphql, session.shop);
@@ -148,6 +159,34 @@ export default function Dashboard() {
 
   return (
     <s-page heading="Margin dashboard">
+      {/* Shown before anything else: an unconfirmed tax setup shifts every
+          margin on the page, so the merchant should not read the figures as
+          settled until they have checked it. */}
+      {!data.onboarding.confirmed ? (
+        <s-section>
+          <s-banner
+            tone={data.onboarding.needsRateConfirmation ? "warning" : "info"}
+            heading="Check your tax setup"
+          >
+            <s-stack direction="block" gap="small-400">
+              <s-paragraph>
+                {data.onboarding.summary} Margins are provisional until you
+                confirm this — getting it wrong shifts every figure here.
+              </s-paragraph>
+              <s-stack direction="inline" gap="base">
+                <Form method="post">
+                  <input type="hidden" name="intent" value="confirm-tax" />
+                  <s-button variant="primary" type="submit">
+                    That&rsquo;s right
+                  </s-button>
+                </Form>
+                <Link to="/app/settings">Change it</Link>
+              </s-stack>
+            </s-stack>
+          </s-banner>
+        </s-section>
+      ) : null}
+
       {showUpgradePrompt ? (
         <s-section>
           <s-banner tone="info" heading="You're on the free plan">

@@ -53,6 +53,20 @@ model ShopSettings {
   /// at is derived from the shop domain rather than stored — see autosync.ts.
   autoSyncEnabled Boolean @default(true)
 
+  /// Set when the merchant has confirmed the detected tax setup.
+  ///
+  /// Until then the dashboard warns that margins are provisional: getting
+  /// `pricesIncludeTax` or the rate wrong shifts every margin in the shop, and
+  /// it does so without any visible symptom.
+  onboardedAt DateTime?
+
+  /// The shop's country at install, kept so the settings page can explain where
+  /// the suggested tax rate came from.
+  detectedCountryCode String?
+  /// True when prices include tax but no rate could be inferred — the one case
+  /// where the merchant must intervene before the numbers mean anything.
+  needsRateConfirmation Boolean @default(false)
+
   lastSyncedAt DateTime?
 
   createdAt DateTime @default(now())

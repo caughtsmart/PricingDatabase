@@ -53,6 +53,10 @@ export interface ShopConfig {
   currencyCode: string;
   lastSyncedAt: Date | null;
   autoSyncEnabled: boolean;
+  /** Null until the merchant has confirmed the detected tax setup. */
+  onboardedAt: Date | null;
+  detectedCountryCode: string | null;
+  needsRateConfirmation: boolean;
 }
 
 /**
@@ -100,6 +104,9 @@ export async function getShopConfig(shop: string): Promise<ShopConfig> {
     currencyCode: record.currencyCode,
     lastSyncedAt: record.lastSyncedAt,
     autoSyncEnabled: record.autoSyncEnabled,
+    onboardedAt: record.onboardedAt,
+    detectedCountryCode: record.detectedCountryCode,
+    needsRateConfirmation: record.needsRateConfirmation,
     settings: {
       pricesIncludeTax: record.pricesIncludeTax,
       taxRatePct: toNumber(record.taxRatePct),

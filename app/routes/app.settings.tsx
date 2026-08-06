@@ -11,6 +11,7 @@ import type { loader as appLoader } from "./app";
 
 import { formatSyncHour } from "../lib/autosync";
 import { formatPercent, parseNumber } from "../lib/format";
+import { markOnboarded } from "../lib/onboarding.server";
 import type { CostRuleKind } from "../lib/margin";
 import {
   deleteCostRule,
@@ -32,6 +33,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     currencyCode: config.currencyCode,
     autoSyncEnabled: config.autoSyncEnabled,
     syncHour: formatSyncHour(session.shop),
+    detectedCountryCode: config.detectedCountryCode,
+    needsRateConfirmation: config.needsRateConfirmation,
   };
 }
 
@@ -71,6 +74,9 @@ export async function action({ request }: ActionFunctionArgs) {
       warnMarginPct,
       criticalMarginPct,
     });
+    // Reviewing and saving this form is exactly the confirmation the onboarding
+    // banner is asking for, so there is no need to make them click twice.
+    await markOnboarded(session.shop);
     return { ok: true, message: "Settings saved." };
   }
 
@@ -119,8 +125,15 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function Settings() {
-  const { settings, rules, currencyCode, autoSyncEnabled, syncHour } =
-    useLoaderData<typeof loader>();
+  const {
+    settings,
+    rules,
+    currencyCode,
+    autoSyncEnabled,
+    syncHour,
+    detectedCountryCode,
+    needsRateConfirmation,
+  } = useLoaderData<typeof loader>();
   const app = useRouteLoaderData<typeof appLoader>("routes/app");
   const subscription = app?.subscription;
   const planUrl = app?.planUrl;
@@ -205,6 +218,13 @@ export default function Settings() {
               min={0}
               max={99}
               step={0.1}
+              details={
+                needsRateConfirmation
+                  ? "We could not work out your rate automatically. Until you set it, margins are calculated on the full price and will look better than they are."
+                  : detectedCountryCode
+                    ? `Suggested from your store's country (${detectedCountryCode}). Change it if you use a different rate.`
+                    : undefined
+              }
               defaultValue={String(settings.taxRatePct)}
             />
             <s-number-field

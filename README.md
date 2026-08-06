@@ -221,6 +221,43 @@ shared with child routes via `useRouteLoaderData`, so a page load costs one
 billing query, not three. If that ever shows up in latency, cache it per shop
 with a short TTL.
 
+## Tax detection at install
+
+Getting tax wrong is the most consequential thing this app can do quietly. The
+engine divides tax out of tax-inclusive prices, so the wrong setting shifts
+*every* margin in the shop by the tax rate — with no visible symptom. A UK store
+left on the wrong setting reports 50% where the truth is 40%.
+
+So the `afterAuth` hook detects the setup on install, and the two halves are
+treated with very different confidence:
+
+| | Source | Confidence |
+|---|---|---|
+| Do prices include tax? | `shop.taxesIncluded` | Authoritative — never ask |
+| What is the rate? | Inferred from the shop's country | A suggestion to confirm |
+
+Shopify has no single "the tax rate" to read: tax is modelled as per-region
+rules that vary by product and destination. So the rate comes from a small
+country table in [`app/lib/onboarding.ts`](app/lib/onboarding.ts), which is a
+**starting point for the merchant to confirm, not a tax lookup**.
+
+Three deliberate choices:
+
+- **An unknown country yields 0, not a guess.** Zero is wrong in an obvious
+  direction — margins look too good — and the banner says exactly that.
+  Inventing a plausible rate would be wrong and invisible.
+- **When prices exclude tax the rate is forced to 0**, not stored. It has no
+  effect on margin in that mode, and a stashed rate would be a trap for whoever
+  later flips the tax-inclusive switch.
+- **Detection never overwrites a confirmed setting.** `afterAuth` fires on every
+  reauth, not just first install, so reinstalling must not reset a rate the
+  merchant deliberately changed.
+
+Until the merchant confirms, the dashboard leads with a banner saying margins
+are provisional. Confirming is one click, and saving the tax form counts as
+confirmation — no need to click twice. A failed detection degrades to "ask the
+human" rather than to bad data, and can never break the OAuth callback.
+
 ## Privacy and GDPR
 
 The three mandatory compliance webhooks are implemented and wired up in
@@ -281,12 +318,11 @@ Done:
 
 - ✅ **Background sync** — bulk operations plus a job queue, no catalogue cap
 - ✅ **Nightly automatic sync** — load-spread across the day, with an opt-out
+- ✅ **Install-time tax detection** — with a confirmation step
 
 Still to do, in rough priority order:
 
 1. **Configure the actual plans** in the Partner Dashboard, then set
    `BILLING_ENFORCED=true` (see [Billing](#billing))
-2. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
-   setting instead of defaulting to UK VAT
-3. App listing assets, privacy policy, and a demo store
-4. Error monitoring and structured logging
+2. App listing assets, privacy policy, and a demo store
+3. Error monitoring and structured logging

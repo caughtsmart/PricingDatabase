@@ -101,12 +101,41 @@ Three details worth knowing if you touch this code:
   already in by then; losing correct product margins because sales history
   stumbled would be the wrong trade. The run completes with a note instead.
 
+### Nightly automatic sync
+
+Merchants do not have to press the button. A pg-boss cron job ticks **hourly**,
+and each shop is assigned a fixed hour derived from a hash of its own domain —
+so a few hundred installs spread evenly across the day instead of every sync
+firing at 03:00 and stampeding both Shopify's bulk queue and our database.
+
+The assignment is deterministic and stable: a shop lands on the same hour
+tomorrow as it did today. Nothing is stored for it, and there is no per-shop
+schedule to create on install or tear down on uninstall.
+
+A shop is skipped when it has opted out, already has a sync in flight, is not
+due this hour, or synced within the last 20 hours. That last guard matters — the
+hourly tick can fire twice for the same hour after a retry or a restart, and
+without it a shop would start a second sync on top of the first.
+
+Shops are enumerated from the `Session` table, so uninstalling drops a shop out
+automatically. A shop that fails — usually a revoked token — is logged and
+skipped rather than aborting the tick for everyone else that hour.
+
+Merchants can turn it off under **Settings → Automatic sync**, which also shows
+the hour their shop is assigned. The scheduling rules live in
+[`app/lib/autosync.ts`](app/lib/autosync.ts), kept free of Prisma so they can be
+tested directly: a bug there is invisible until it either hammers Shopify or
+quietly stops syncing everyone.
+
 The queue is [pg-boss](https://github.com/timgit/pg-boss), chosen to avoid
 adding Redis. It runs its SQL through Prisma's existing connection pool via
 pg-boss's Prisma adapter, so the app still opens exactly one pool — worth caring
 about, because managed Postgres connection limits are usually the first thing a
 Shopify app hits. Jobs are durable, retried with backoff, and locked in
 Postgres, so several web instances running the in-process worker is safe.
+
+The queue starts when the server boots (not on first use), because the hourly
+schedule has to be running even on a day nobody opens the app.
 
 Run the worker separately once ingestion starts competing with request latency:
 
@@ -251,13 +280,13 @@ Done:
 - ✅ **GDPR webhooks** — all three mandatory topics, with an audit trail
 
 - ✅ **Background sync** — bulk operations plus a job queue, no catalogue cap
+- ✅ **Nightly automatic sync** — load-spread across the day, with an opt-out
 
 Still to do, in rough priority order:
 
 1. **Configure the actual plans** in the Partner Dashboard, then set
    `BILLING_ENFORCED=true` (see [Billing](#billing))
-2. Schedule a nightly sync so merchants do not have to press the button
-3. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
+2. Onboarding: detect `shop.taxesIncluded` on install and pre-fill the tax
    setting instead of defaulting to UK VAT
-4. App listing assets, privacy policy, and a demo store
-5. Error monitoring and structured logging
+3. App listing assets, privacy policy, and a demo store
+4. Error monitoring and structured logging

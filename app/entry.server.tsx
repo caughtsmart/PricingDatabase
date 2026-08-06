@@ -5,9 +5,21 @@ import type { AppLoadContext, EntryContext } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 
+import { startBackgroundJobs } from "./queue.server";
 import { addDocumentResponseHeaders } from "./shopify.server";
 
 const ABORT_DELAY = 5000;
+
+// Start the queue when the server boots rather than on the first enqueue: the
+// hourly auto-sync schedule has to be running even on a day nobody opens the
+// app. A failure here must not stop the server from serving — the app is
+// perfectly usable with manual syncs.
+if (process.env.RUN_WORKER_IN_PROCESS !== "false") {
+  void startBackgroundJobs().catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error("[queue] background jobs failed to start", error);
+  });
+}
 
 export default async function handleRequest(
   request: Request,

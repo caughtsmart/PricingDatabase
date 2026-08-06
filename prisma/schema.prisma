@@ -49,6 +49,10 @@ model ShopSettings {
   /// over a merchant who has deliberately deleted them.
   defaultsSeeded Boolean @default(false)
 
+  /// Whether the nightly background sync runs for this shop. The hour it runs
+  /// at is derived from the shop domain rather than stored — see autosync.ts.
+  autoSyncEnabled Boolean @default(true)
+
   lastSyncedAt DateTime?
 
   createdAt DateTime @default(now())

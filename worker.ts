@@ -9,10 +9,10 @@
  *
  * pg-boss locks jobs in Postgres, so running several of these is safe.
  */
-import { startSyncWorker, getBoss } from "./app/queue.server";
+import { startBackgroundJobs, getBoss } from "./app/queue.server";
 
 async function main() {
-  await startSyncWorker();
+  await startBackgroundJobs();
   // eslint-disable-next-line no-console
   console.log("[worker] ready");
 }

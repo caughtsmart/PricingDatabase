@@ -9,6 +9,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import type { loader as appLoader } from "./app";
 
+import { formatSyncHour } from "../lib/autosync";
 import { formatPercent, parseNumber } from "../lib/format";
 import type { CostRuleKind } from "../lib/margin";
 import {
@@ -29,6 +30,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     settings: config.settings,
     rules: config.rules,
     currencyCode: config.currencyCode,
+    autoSyncEnabled: config.autoSyncEnabled,
+    syncHour: formatSyncHour(session.shop),
   };
 }
 
@@ -71,6 +74,13 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: true, message: "Settings saved." };
   }
 
+  if (intent === "auto-sync") {
+    await updateShopSettings(session.shop, {
+      autoSyncEnabled: formData.get("autoSyncEnabled") === "on",
+    });
+    return { ok: true, message: "Sync schedule updated." };
+  }
+
   if (intent === "rule") {
     const name = String(formData.get("name") ?? "").trim();
     if (!name) return { ok: false, message: "Give the cost rule a name." };
@@ -109,7 +119,8 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function Settings() {
-  const { settings, rules, currencyCode } = useLoaderData<typeof loader>();
+  const { settings, rules, currencyCode, autoSyncEnabled, syncHour } =
+    useLoaderData<typeof loader>();
   const app = useRouteLoaderData<typeof appLoader>("routes/app");
   const subscription = app?.subscription;
   const planUrl = app?.planUrl;
@@ -159,6 +170,23 @@ export default function Settings() {
           </s-stack>
         </s-section>
       ) : null}
+
+      <s-section heading="Automatic sync">
+        <Form method="post">
+          <input type="hidden" name="intent" value="auto-sync" />
+          <s-stack direction="block" gap="base">
+            <s-checkbox
+              name="autoSyncEnabled"
+              label="Sync my catalogue automatically each day"
+              details={`Runs at about ${syncHour}. The time is fixed per shop so that syncs are spread out rather than all firing at once. You can still sync manually at any point.`}
+              defaultChecked={autoSyncEnabled}
+            />
+            <s-button type="submit" disabled={busy}>
+              Save schedule
+            </s-button>
+          </s-stack>
+        </Form>
+      </s-section>
 
       <s-section heading="Tax and targets">
         <Form method="post">

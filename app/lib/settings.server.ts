@@ -52,6 +52,7 @@ export interface ShopConfig {
   rules: CostRule[];
   currencyCode: string;
   lastSyncedAt: Date | null;
+  autoSyncEnabled: boolean;
 }
 
 /**
@@ -98,6 +99,7 @@ export async function getShopConfig(shop: string): Promise<ShopConfig> {
   return {
     currencyCode: record.currencyCode,
     lastSyncedAt: record.lastSyncedAt,
+    autoSyncEnabled: record.autoSyncEnabled,
     settings: {
       pricesIncludeTax: record.pricesIncludeTax,
       taxRatePct: toNumber(record.taxRatePct),
@@ -122,6 +124,7 @@ export interface UpdateSettingsInput {
   targetMarginPct?: number;
   warnMarginPct?: number;
   criticalMarginPct?: number;
+  autoSyncEnabled?: boolean;
 }
 
 export async function updateShopSettings(

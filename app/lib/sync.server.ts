@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 
 import prisma from "../db.server";
+import type { AutoSyncCandidate } from "./autosync";
 import {
   BulkOperationError,
   CATALOG_BULK_QUERY,
@@ -491,6 +492,54 @@ export async function ingestOrders(shop: string, url: string): Promise<number> {
   }
 
   return ordersScanned;
+}
+
+/**
+ * Every installed shop, with the facts the auto-sync scheduler needs.
+ *
+ * Installed means "has a session": `app/uninstalled` deletes them, so an
+ * uninstalled shop drops out of this list without any extra bookkeeping.
+ *
+ * Shops that have never opened the app have no `ShopSettings` row yet; they are
+ * still returned, with auto-sync on, so a merchant who installs and walks away
+ * still gets their first catalogue pulled in.
+ */
+export async function findAutoSyncCandidates(): Promise<AutoSyncCandidate[]> {
+  const sessions = await prisma.session.findMany({
+    distinct: ["shop"],
+    select: { shop: true },
+  });
+  if (!sessions.length) return [];
+
+  const shops = sessions.map((session) => session.shop);
+
+  const [settings, activeRuns] = await Promise.all([
+    prisma.shopSettings.findMany({
+      where: { shop: { in: shops } },
+      select: { shop: true, autoSyncEnabled: true, lastSyncedAt: true },
+    }),
+    prisma.syncRun.findMany({
+      where: {
+        shop: { in: shops },
+        status: { in: ["queued", "running", "ingesting"] },
+      },
+      select: { shop: true },
+      distinct: ["shop"],
+    }),
+  ]);
+
+  const settingsByShop = new Map(settings.map((row) => [row.shop, row]));
+  const busy = new Set(activeRuns.map((row) => row.shop));
+
+  return shops.map((shop) => {
+    const row = settingsByShop.get(shop);
+    return {
+      shop,
+      autoSyncEnabled: row?.autoSyncEnabled ?? true,
+      lastSyncedAt: row?.lastSyncedAt ?? null,
+      hasActiveRun: busy.has(shop),
+    };
+  });
 }
 
 /** Abandons a stuck run and asks Shopify to stop the operation behind it. */

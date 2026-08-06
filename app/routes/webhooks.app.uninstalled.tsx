@@ -2,11 +2,11 @@ import type { ActionFunctionArgs } from "react-router";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { logger } from "../monitoring.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   const { shop, session, topic } = await authenticate.webhook(request);
-  // eslint-disable-next-line no-console
-  console.log(`Received ${topic} webhook for ${shop}`);
+  logger.info("Webhook received", { shop, topic });
 
   // The app may be reinstalled later, so drop the session (it is dead) and the
   // cached catalogue (it will be stale), but keep the merchant's cost data:

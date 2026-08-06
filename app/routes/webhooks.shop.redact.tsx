@@ -6,6 +6,7 @@ import {
   recordComplianceRequest,
 } from "../lib/gdpr.server";
 import { authenticate } from "../shopify.server";
+import { logger } from "../monitoring.server";
 
 /**
  * Mandatory topic: erase everything belonging to a shop.
@@ -33,14 +34,16 @@ export async function action({ request }: ActionFunctionArgs) {
         `${purged.sessions} sessions.`,
     );
 
-    // eslint-disable-next-line no-console
-    console.log(`[compliance] ${topic} for ${shop}: purged ${purged.total} rows`);
+    logger.info("Compliance purge complete", {
+      shop,
+      topic,
+      rowsPurged: purged.total,
+    });
   } catch (error) {
     // Leave the request row open (no completedAt) so an incomplete purge is
     // visible rather than silently recorded as done. Shopify retries on a
     // non-2xx, so rethrowing gives us another attempt inside the 30-day window.
-    // eslint-disable-next-line no-console
-    console.error(`[compliance] ${topic} for ${shop} failed`, error);
+    logger.error("Compliance purge failed", { shop, topic, error });
     throw error;
   }
 

@@ -3,6 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { enqueueSync } from "../queue.server";
 import { findRunByBulkOperation } from "../lib/sync.server";
 import { authenticate } from "../shopify.server";
+import { logger } from "../monitoring.server";
 
 interface BulkFinishPayload {
   admin_graphql_api_id?: string;
@@ -31,19 +32,23 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const run = await findRunByBulkOperation(shop, bulkOperationId);
   if (!run) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[${topic}] ${shop}: no sync run awaiting ${bulkOperationId}, ignoring`,
-    );
+    logger.info("Bulk operation has no tracked sync run; ignoring", {
+      shop,
+      topic,
+      bulkOperationId,
+    });
     return new Response();
   }
 
   await enqueueSync({ shop, syncRunId: run.id });
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[${topic}] ${shop}: queued ${run.stage} ingest for run ${run.id} (${body.status})`,
-  );
+  logger.info("Queued bulk ingest", {
+    shop,
+    topic,
+    syncRunId: run.id,
+    stage: run.stage,
+    bulkStatus: body.status,
+  });
 
   return new Response();
 }

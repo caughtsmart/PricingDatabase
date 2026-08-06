@@ -9,6 +9,7 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 import prisma from "./db.server";
 import type { GraphQLClient } from "./lib/catalog.server";
 import { applyDetectedDefaults } from "./lib/onboarding.server";
+import { logger } from "./monitoring.server";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -31,8 +32,10 @@ const shopify = shopifyApp({
           admin.graphql as GraphQLClient,
         );
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error("[onboarding] afterAuth detection failed", error);
+        logger.error("Install-time tax detection failed", {
+          shop: session.shop,
+          error,
+        });
       }
     },
   },

@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import prisma from "../db.server";
+import { clampLevel, type DisclosureLevel } from "./disclosure";
 import type { CostRule, MarginSettings } from "./margin";
 
 /**
@@ -55,6 +56,8 @@ export interface ShopConfig {
   autoSyncEnabled: boolean;
   /** Average units per order; divides FIXED_PER_ORDER cost rules. */
   avgUnitsPerOrder: number;
+  /** How much of the working the widget shows by default. */
+  disclosureLevel: DisclosureLevel;
   /** Null until the merchant has confirmed the detected tax setup. */
   onboardedAt: Date | null;
   detectedCountryCode: string | null;
@@ -107,6 +110,7 @@ export async function getShopConfig(shop: string): Promise<ShopConfig> {
     lastSyncedAt: record.lastSyncedAt,
     autoSyncEnabled: record.autoSyncEnabled,
     avgUnitsPerOrder: toNumber(record.avgUnitsPerOrder) || 1,
+    disclosureLevel: clampLevel(record.disclosureLevel),
     onboardedAt: record.onboardedAt,
     detectedCountryCode: record.detectedCountryCode,
     needsRateConfirmation: record.needsRateConfirmation,
@@ -141,6 +145,7 @@ export interface UpdateSettingsInput {
   criticalMarginPct?: number;
   autoSyncEnabled?: boolean;
   avgUnitsPerOrder?: number;
+  disclosureLevel?: DisclosureLevel;
 }
 
 export async function updateShopSettings(

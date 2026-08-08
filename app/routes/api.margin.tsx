@@ -24,6 +24,12 @@ import {
   quoteForTargetMargin,
   type MarginResult,
 } from "../lib/margin";
+import {
+  hiddenCostSummary,
+  NUDGE_BLOCKS,
+  viewForLevel,
+  type DisclosureView,
+} from "../lib/disclosure";
 import { buildWaterfall, type Waterfall } from "../lib/waterfall";
 import { getShopConfig } from "../lib/settings.server";
 import { authenticate } from "../shopify.server";
@@ -54,6 +60,8 @@ export interface VariantMarginPayload {
   margin: MarginResult;
   /** Pre-built money waterfall segments; the widget renders, never computes. */
   waterfall: Waterfall;
+  /** Chip text when costs are folded away at this level; null when none are. */
+  hiddenCostSummary: string | null;
 }
 
 export interface MarginApiPayload {
@@ -61,6 +69,20 @@ export interface MarginApiPayload {
   productTitle: string;
   currencyCode: string;
   targetMarginPct: number;
+  /**
+   * Progressive disclosure, resolved server-side so the widget renders flags
+   * rather than re-implementing the level rules (which live, tested, in
+   * disclosure.ts). Levels hide working, never money.
+   */
+  disclosure: {
+    level: number;
+    view: DisclosureView;
+    /** The level-1 "most sellers forget" one-tap draft blocks. */
+    nudgeBlocks: Array<{
+      label: string;
+      kind: "FIXED_PER_UNIT" | "PERCENT_OF_COST";
+    }>;
+  };
   variants: VariantMarginPayload[];
   appliedRuleNames: string[];
 }
@@ -109,6 +131,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     productTitle: product.productTitle,
     currencyCode: product.currencyCode || config.currencyCode,
     targetMarginPct: config.settings.targetMarginPct,
+    disclosure: {
+      level: config.disclosureLevel,
+      view: viewForLevel(config.disclosureLevel),
+      nudgeBlocks: NUDGE_BLOCKS,
+    },
     appliedRuleNames: config.rules
       .filter((rule) => rule.enabled)
       .map((rule) => rule.name),
@@ -143,6 +170,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         components,
         margin,
         waterfall: buildWaterfall(margin),
+        hiddenCostSummary: hiddenCostSummary(
+          config.disclosureLevel,
+          components.filter((component) => component.enabled !== false).length,
+          margin.appliedCosts.length,
+        ),
       };
     }),
   };

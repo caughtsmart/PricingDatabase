@@ -102,13 +102,48 @@ interface VariantPayload {
   components: CostComponentInput[];
   margin: MarginResult;
   waterfall: Waterfall;
+  hiddenCostSummary: string | null;
 }
+
+/**
+ * Which parts of the widget the shop's disclosure level shows. Resolved on
+ * the server (app/lib/disclosure.ts) — the widget renders flags, it does not
+ * re-implement the level rules. Hidden sections still count in every number.
+ */
+interface DisclosureView {
+  waterfall: boolean;
+  walk: boolean;
+  itemisedRules: boolean;
+  stats: boolean;
+  blocks: boolean;
+  solve: boolean;
+  stockAndDiscount: boolean;
+}
+
+/** What peeking shows: everything, regardless of the shop's level. */
+const FULL_VIEW: DisclosureView = {
+  waterfall: true,
+  walk: true,
+  itemisedRules: true,
+  stats: true,
+  blocks: true,
+  solve: true,
+  stockAndDiscount: true,
+};
 
 interface MarginApiPayload {
   productId: string;
   productTitle: string;
   currencyCode: string;
   targetMarginPct: number;
+  disclosure: {
+    level: number;
+    view: DisclosureView;
+    nudgeBlocks: Array<{
+      label: string;
+      kind: "FIXED_PER_UNIT" | "PERCENT_OF_COST";
+    }>;
+  };
   variants: VariantPayload[];
   appliedRuleNames: string[];
 }
@@ -174,6 +209,25 @@ function statusTone(status: MarginStatus) {
   }
 }
 
+/**
+ * Level 1's one sentence: the answer to "am I losing money?" in words,
+ * because at that level the walk that would explain the number is hidden.
+ */
+function plainSentence(
+  margin: MarginResult,
+  targetPct: number,
+  fmt: (value: number) => string,
+): string | null {
+  if (!margin.hasCostData) return null;
+  if (margin.status === "loss") {
+    return `You lose ${fmt(Math.abs(margin.netProfit))} every time this sells.`;
+  }
+  if (margin.status === "healthy") {
+    return `You keep ${fmt(margin.netProfit)} of every sale — on or above your ${targetPct}% target.`;
+  }
+  return `You make ${fmt(margin.netProfit)} a unit — below your ${targetPct}% target.`;
+}
+
 function statusLabel(status: MarginStatus) {
   switch (status) {
     case "loss":
@@ -223,6 +277,9 @@ function ProductMarginBlock() {
   // Block extensions have no toast API (that is App Home only), so saving is
   // confirmed inline instead.
   const [saved, setSaved] = useState(false);
+  // "Show everything" — a temporary lift to the full view. Deliberately not
+  // persisted: the level is a shop setting; a peek is a glance.
+  const [peek, setPeek] = useState(false);
 
   const load = useCallback(async () => {
     if (!productId) {
@@ -320,6 +377,31 @@ function ProductMarginBlock() {
     setSaved(false);
   }, []);
 
+  // The level-1 nudge: one tap drops in the commonly forgotten blocks,
+  // labelled but at zero — real figures come from the merchant, not from a
+  // guess. Peek opens the block list so the new blocks are actually visible.
+  const addNudgeBlocks = useCallback(() => {
+    if (!payload) return;
+    setDraftBlocks((current) => [
+      ...current,
+      ...payload.disclosure.nudgeBlocks.map((nudge) => {
+        newBlockSeq.current += 1;
+        return {
+          id: `new-${newBlockSeq.current}`,
+          parentId: null,
+          label: nudge.label,
+          kind: nudge.kind,
+          value: "0",
+          confidence: "GUESSED" as const,
+          enabled: true,
+        };
+      }),
+    ]);
+    setDirty(true);
+    setSaved(false);
+    setPeek(true);
+  }, [payload]);
+
   const save = useCallback(async () => {
     if (!selected || !payload) return;
 
@@ -409,6 +491,16 @@ function ProductMarginBlock() {
         ? `${savedBlockLabels.slice(0, 3).join(", ")} +${savedBlockLabels.length - 3} more`
         : savedBlockLabels.join(", ");
 
+  // Peeking lifts everything into view; the shop's level otherwise decides.
+  const view = peek ? FULL_VIEW : payload.disclosure.view;
+  const level = payload.disclosure.level;
+  const sentence = plainSentence(margin, payload.targetMarginPct, fmt);
+  const showNudge =
+    level === 1 &&
+    !peek &&
+    margin.hasCostData &&
+    selected.components.length === 0;
+
   return (
     <s-admin-block heading="Margin">
       <s-stack direction="block" gap="base">
@@ -449,6 +541,35 @@ function ProductMarginBlock() {
           </s-text>
         </s-stack>
 
+        {/* Markup sits beside margin at every level (DESIGN.md §8): "I add
+            50% so I make 50%" is the most expensive misunderstanding in
+            small business, and it does not belong in a tooltip. */}
+        {margin.hasCostData ? (
+          <s-text color="subdued">
+            Markup on cost: {percent(margin.markupPct)} — not the same thing as
+            margin.
+          </s-text>
+        ) : null}
+
+        {/* Level 1 trades the walk for one plain sentence. */}
+        {!view.walk && sentence ? <s-text>{sentence}</s-text> : null}
+
+        {/* Folded-away costs are announced, never silent: a level hides
+            working, not money, and the peek proves it. */}
+        {selected.hiddenCostSummary && !peek ? (
+          <s-stack direction="inline" gap="small-300" alignItems="center">
+            <s-text color="subdued">{selected.hiddenCostSummary}.</s-text>
+            <s-button variant="tertiary" onClick={() => setPeek(true)}>
+              Show everything
+            </s-button>
+          </s-stack>
+        ) : null}
+        {peek ? (
+          <s-button variant="tertiary" onClick={() => setPeek(false)}>
+            Back to your usual view
+          </s-button>
+        ) : null}
+
         {!margin.hasCostData ? (
           <s-banner tone="warning">
             <s-paragraph>
@@ -464,56 +585,73 @@ function ProductMarginBlock() {
             allows neutral background fills (transparent/base/subdued/strong),
             so the DESIGN.md ambition of a coloured profit segment is carried
             by the selected-segment detail and the badge above instead. */}
-        <MoneyWaterfall waterfall={selected.waterfall} fmt={fmt} />
+        {view.waterfall ? (
+          <MoneyWaterfall waterfall={selected.waterfall} fmt={fmt} />
+        ) : null}
 
         {/* The full walk from price down to profit. */}
-        <s-box padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="small-400">
-            <Row label="Price" value={fmt(margin.grossRevenue)} />
-            {margin.taxAmount > 0 ? (
-              <Row label="Less tax" value={`− ${fmt(margin.taxAmount)}`} subdued />
-            ) : null}
-            <Row label="Revenue you keep" value={fmt(margin.netRevenue)} strong />
-            <s-divider />
-            <Row label="Unit cost" value={`− ${fmt(margin.unitCost)}`} subdued />
-            {margin.extraUnitCost > 0 ? (
-              <Row
-                label={extraCostLabel}
-                value={`− ${fmt(margin.extraUnitCost)}`}
-                subdued
+        {view.walk ? (
+          <s-box padding="base" borderWidth="base" borderRadius="base">
+            <s-stack direction="block" gap="small-400">
+              <Row label="Price" value={fmt(margin.grossRevenue)} />
+              {margin.taxAmount > 0 ? (
+                <Row label="Less tax" value={`− ${fmt(margin.taxAmount)}`} subdued />
+              ) : null}
+              <Row label="Revenue you keep" value={fmt(margin.netRevenue)} strong />
+              <s-divider />
+              <Row label="Unit cost" value={`− ${fmt(margin.unitCost)}`} subdued />
+              {margin.extraUnitCost > 0 ? (
+                <Row
+                  label={extraCostLabel}
+                  value={`− ${fmt(margin.extraUnitCost)}`}
+                  subdued
+                />
+              ) : null}
+              <Row label="Landed cost" value={fmt(margin.landedUnitCost)} strong />
+              {view.itemisedRules ? (
+                margin.appliedCosts.map((cost) => (
+                  <Row
+                    key={cost.id}
+                    label={ruleLabel(cost)}
+                    value={`− ${fmt(cost.amount)}`}
+                    subdued
+                  />
+                ))
+              ) : margin.appliedCosts.length > 0 ? (
+                // Below level 3 the rules sum to one honest line — the money
+                // is all there, the itemisation waits for the full view.
+                <Row
+                  label={`Shop-wide costs (${margin.appliedCosts.length})`}
+                  value={`− ${fmt(margin.totalVariableCost)}`}
+                  subdued
+                />
+              ) : null}
+              <s-divider />
+              <Row label="Net profit" value={fmt(margin.netProfit)} strong />
+            </s-stack>
+          </s-box>
+        ) : null}
+
+        {view.stats ? (
+          <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+            <Stat
+              label="Break-even price"
+              value={margin.breakEvenPrice === null ? "—" : fmt(margin.breakEvenPrice)}
+            />
+            <Stat
+              label={`Price for ${percent(payload.targetMarginPct)}`}
+              value={margin.targetPrice === null ? "—" : fmt(margin.targetPrice)}
+            />
+            {view.stockAndDiscount ? (
+              <Stat
+                label="Profit if stock sells"
+                value={fmt(margin.netProfit * selected.inventoryQuantity)}
               />
             ) : null}
-            <Row label="Landed cost" value={fmt(margin.landedUnitCost)} strong />
-            {margin.appliedCosts.map((cost) => (
-              <Row
-                key={cost.id}
-                label={ruleLabel(cost)}
-                value={`− ${fmt(cost.amount)}`}
-                subdued
-              />
-            ))}
-            <s-divider />
-            <Row label="Net profit" value={fmt(margin.netProfit)} strong />
-          </s-stack>
-        </s-box>
+          </s-grid>
+        ) : null}
 
-        <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-          <Stat
-            label="Break-even price"
-            value={margin.breakEvenPrice === null ? "—" : fmt(margin.breakEvenPrice)}
-          />
-          <Stat
-            label={`Price for ${percent(payload.targetMarginPct)}`}
-            value={margin.targetPrice === null ? "—" : fmt(margin.targetPrice)}
-          />
-          <Stat label="Markup on cost" value={percent(margin.markupPct)} />
-          <Stat
-            label="Profit if stock sells"
-            value={fmt(margin.netProfit * selected.inventoryQuantity)}
-          />
-        </s-grid>
-
-        {margin.discountPct !== null ? (
+        {view.stockAndDiscount && margin.discountPct !== null ? (
           <s-text color="subdued">
             Currently discounted {percent(margin.discountPct)} from the compare-at
             price.
@@ -531,7 +669,24 @@ function ProductMarginBlock() {
             setSaved(false);
           }}
         />
-        {draftBlocks.length === 0 ? (
+        {showNudge ? (
+          <s-banner tone="info">
+            <s-stack direction="block" gap="small-400">
+              <s-paragraph>
+                Most sellers forget three things — payment fees, postage and
+                returns.{" "}
+                {payload.appliedRuleNames.length > 0
+                  ? "Your shop-wide rules already cover payment fees. Add the rest?"
+                  : "Add them?"}
+              </s-paragraph>
+              <s-button onClick={() => addNudgeBlocks()}>
+                Add the missing costs
+              </s-button>
+            </s-stack>
+          </s-banner>
+        ) : null}
+
+        {!view.blocks ? null : draftBlocks.length === 0 ? (
           <s-text color="subdued">
             No extra costs yet. Add what it takes to get this on the shelf —
             freight, duty, packaging — so the margin above is the real one.
@@ -615,16 +770,18 @@ function ProductMarginBlock() {
           </s-stack>
         )}
 
-        <s-stack direction="inline" gap="small-300">
-          <s-button variant="secondary" onClick={() => addBlock("FIXED_PER_UNIT")}>
-            Add a cost per unit
-          </s-button>
-          <s-button variant="secondary" onClick={() => addBlock("PERCENT_OF_COST")}>
-            Add a % of goods cost
-          </s-button>
-        </s-stack>
+        {view.blocks ? (
+          <s-stack direction="inline" gap="small-300">
+            <s-button variant="secondary" onClick={() => addBlock("FIXED_PER_UNIT")}>
+              Add a cost per unit
+            </s-button>
+            <s-button variant="secondary" onClick={() => addBlock("PERCENT_OF_COST")}>
+              Add a % of goods cost
+            </s-button>
+          </s-stack>
+        ) : null}
 
-        {payload.appliedRuleNames.length > 0 ? (
+        {view.blocks && payload.appliedRuleNames.length > 0 ? (
           <s-text color="subdued">
             Shop-wide costs applied: {payload.appliedRuleNames.join(", ")}.
           </s-text>
@@ -648,6 +805,7 @@ function ProductMarginBlock() {
           {saved ? <s-text tone="success">Saved</s-text> : null}
         </s-stack>
 
+        {view.solve ? (
         <SolvePanel
           key={selected.variantId}
           variantId={selected.variantId}
@@ -659,6 +817,7 @@ function ProductMarginBlock() {
           fmt={fmt}
           onPriceApplied={() => void load()}
         />
+        ) : null}
       </s-stack>
     </s-admin-block>
   );

@@ -10,6 +10,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import type { loader as appLoader } from "./app";
 
 import { formatSyncHour } from "../lib/autosync";
+import { clampLevel, LEVEL_OPTIONS } from "../lib/disclosure";
 import { formatPercent, parseNumber } from "../lib/format";
 import { markOnboarded } from "../lib/onboarding.server";
 import type { CostRuleKind } from "../lib/margin";
@@ -33,6 +34,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     currencyCode: config.currencyCode,
     autoSyncEnabled: config.autoSyncEnabled,
     avgUnitsPerOrder: config.avgUnitsPerOrder,
+    disclosureLevel: config.disclosureLevel,
     syncHour: formatSyncHour(session.shop),
     detectedCountryCode: config.detectedCountryCode,
     needsRateConfirmation: config.needsRateConfirmation,
@@ -125,6 +127,15 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: true, message: "Settings saved." };
   }
 
+  if (intent === "disclosure") {
+    // clampLevel degrades junk to level 1 rather than rejecting: the worst
+    // outcome of a mangled form post is a simpler view, never an error.
+    await updateShopSettings(session.shop, {
+      disclosureLevel: clampLevel(formData.get("disclosureLevel")),
+    });
+    return { ok: true, message: "Detail level saved." };
+  }
+
   if (intent === "auto-sync") {
     await updateShopSettings(session.shop, {
       autoSyncEnabled: formData.get("autoSyncEnabled") === "on",
@@ -195,6 +206,7 @@ export default function Settings() {
     currencyCode,
     autoSyncEnabled,
     avgUnitsPerOrder,
+    disclosureLevel,
     syncHour,
     detectedCountryCode,
     needsRateConfirmation,
@@ -248,6 +260,41 @@ export default function Settings() {
           </s-stack>
         </s-section>
       ) : null}
+
+      <s-section heading="How much detail on the product page">
+        <s-paragraph>
+          Pick how much of the working the margin widget shows. Every level
+          uses <s-text type="strong">all</s-text> of your costs in the numbers
+          — a simpler view hides detail, never money.
+        </s-paragraph>
+        <Form method="post">
+          <input type="hidden" name="intent" value="disclosure" />
+          <s-stack direction="block" gap="base">
+            <s-select
+              name="disclosureLevel"
+              label="Detail level"
+              value={String(disclosureLevel)}
+            >
+              {LEVEL_OPTIONS.map((option) => (
+                <s-option key={option.level} value={String(option.level)}>
+                  {option.label}
+                </s-option>
+              ))}
+            </s-select>
+            <s-stack direction="block" gap="small-500">
+              {LEVEL_OPTIONS.map((option) => (
+                <s-text key={option.level} color="subdued">
+                  <s-text type="strong">{option.label}</s-text> —{" "}
+                  {option.description}
+                </s-text>
+              ))}
+            </s-stack>
+            <s-button type="submit" disabled={busy}>
+              Save detail level
+            </s-button>
+          </s-stack>
+        </Form>
+      </s-section>
 
       <s-section heading="Automatic sync">
         <Form method="post">
@@ -425,11 +472,12 @@ export default function Settings() {
       <s-section heading="How margin is worked out">
         <s-paragraph>
           Net revenue is the price {settings.pricesIncludeTax ? "minus" : "plus no"}{" "}
-          tax. Landed cost is Shopify&rsquo;s cost per item plus the freight,
-          duty, packaging and handling you enter on the product page. Shop-wide
-          rules come off after that. What is left is net profit, and net margin
-          is that as a share of net revenue. Anything under{" "}
-          {formatPercent(settings.criticalMarginPct)} is flagged critical.
+          tax. Landed cost is Shopify&rsquo;s cost per item plus the cost
+          blocks you add on the product page — flat amounts and percentages of
+          the goods cost. Shop-wide rules come off after that. What is left is
+          net profit, and net margin is that as a share of net revenue.
+          Anything under {formatPercent(settings.criticalMarginPct)} is
+          flagged critical.
         </s-paragraph>
       </s-section>
     </s-page>

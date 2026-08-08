@@ -133,7 +133,10 @@ are done — `CostRuleKind` has all six kinds, the solver is the generalised
 closed form, and variant costs are `CostComponent` rows resolved by
 `app/lib/components.ts` (pure, like the engine — the tree rules and cycle
 guard are unit-tested there). Read it before touching `CostComponent`,
-`CostRule` or `solvePriceForMargin`. Still open, per the doc: confidence in
+`CostRule` or `solvePriceForMargin`. The §4 disclosure levels are also in:
+`app/lib/disclosure.ts` (pure again) resolves a shop's level into view flags
+the widget renders — levels hide working, never money, and the monotonicity
+test enforces "moving up never hides". Still open, per the doc: confidence in
 the UI, per-component `base` overrides, and product/template scope.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding

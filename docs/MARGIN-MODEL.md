@@ -110,6 +110,16 @@ Tag each value `KNOWN | ESTIMATED | GUESSED`. It drives:
 Four steps, each independently shippable, none of which breaks the existing
 tests if done in order.
 
+> **Status:** steps 1–3 are shipped. All six kinds exist in `CostRuleKind`
+> (schema and engine), amounts resolve against their declared bases, and the
+> solver uses the generalised closed form below with its round-trip tests
+> intact. `FIXED_PER_ORDER` divides by `ShopSettings.avgUnitsPerOrder`;
+> `PER_DAY_HELD` multiplies by a per-variant days-of-cover estimate
+> (`daysHeldEstimate` in `margin.ts`) derived from synced stock and 90-day
+> sales. Step 4 — replacing `VariantCost`'s columns with `CostComponent` rows —
+> remains open, and with it grouping (`parentId`), per-rule `base` overrides,
+> `scope` and `confidence`.
+
 ### Step 1 — extend the enum
 
 Add `PERCENT_OF_COST`, `FIXED_PER_ORDER`, `RATE_TIMES_COST`, `PER_DAY_HELD` to

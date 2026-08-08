@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregate,
   calculateMargin,
+  daysHeldEstimate,
   roundMoney,
   solvePriceForMargin,
   toNetRevenue,
@@ -239,6 +240,140 @@ describe("calculateMargin", () => {
   });
 });
 
+describe("the four block kinds beyond percent-of-revenue and fixed-per-unit", () => {
+  const rule = (kind: CostRule["kind"], value: number): CostRule => ({
+    id: kind.toLowerCase(),
+    name: kind,
+    kind,
+    value,
+    enabled: true,
+  });
+
+  it("PERCENT_OF_COST charges against landed cost, not revenue", () => {
+    // 4.5% duty on a £60 landed cost is £2.70 — the same rule against revenue
+    // would wrongly charge £4.50, the silent error the base-aware kinds fix.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("PERCENT_OF_COST", 4.5)],
+      settings: ukSettings,
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(2.7);
+    expect(result.netProfit).toBe(37.3);
+  });
+
+  it("RATE_TIMES_COST charges the expected write-off per sale", () => {
+    // An 8% return-and-scrap rate on a £60 unit costs £4.80 per sale in
+    // expectation.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("RATE_TIMES_COST", 8)],
+      settings: ukSettings,
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(4.8);
+  });
+
+  it("FIXED_PER_ORDER spreads the charge across the basket", () => {
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("FIXED_PER_ORDER", 3.5)],
+      settings: ukSettings,
+      context: { unitsPerOrder: 2.5 },
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(1.4);
+  });
+
+  it("FIXED_PER_ORDER falls back to one unit per order without context", () => {
+    // The safe default: behaves like FIXED_PER_UNIT rather than dividing by
+    // zero or silently vanishing.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("FIXED_PER_ORDER", 3.5)],
+      settings: ukSettings,
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(3.5);
+  });
+
+  it("clamps a nonsense basket size to one", () => {
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("FIXED_PER_ORDER", 3.5)],
+      settings: ukSettings,
+      context: { unitsPerOrder: 0 },
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(3.5);
+  });
+
+  it("PER_DAY_HELD multiplies by days in stock", () => {
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("PER_DAY_HELD", 0.02)],
+      settings: ukSettings,
+      context: { daysHeld: 45 },
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(0.9);
+  });
+
+  it("PER_DAY_HELD contributes nothing until days held is known", () => {
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [rule("PER_DAY_HELD", 0.02)],
+      settings: ukSettings,
+    });
+
+    expect(result.appliedCosts[0].amount).toBe(0);
+  });
+
+  it("the original two kinds are untouched by the generalisation", () => {
+    // The regression MARGIN-MODEL.md step 2 demands: summing behaviour for
+    // the existing kinds must be unchanged.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60 },
+      rules: [paymentFee, pickPack],
+      settings: ukSettings,
+      context: { unitsPerOrder: 3, daysHeld: 100 },
+    });
+
+    expect(result.totalVariableCost).toBe(2.2);
+    expect(result.netProfit).toBe(37.8);
+  });
+});
+
+describe("daysHeldEstimate", () => {
+  it("estimates days of cover from stock and sales velocity", () => {
+    // 30 in stock, selling 90 over 90 days (1/day) → 30 days of cover.
+    expect(daysHeldEstimate(30, 90)).toBe(30);
+  });
+
+  it("caps the estimate for slow sellers", () => {
+    expect(daysHeldEstimate(1000, 1)).toBe(365);
+  });
+
+  it("gives dead stock the cap, not zero", () => {
+    // Stock with no sales sits indefinitely; a year of holding cost is the
+    // truthful answer, not an edge case to zero out.
+    expect(daysHeldEstimate(10, 0)).toBe(365);
+  });
+
+  it("returns zero with no stock", () => {
+    expect(daysHeldEstimate(0, 5)).toBe(0);
+    expect(daysHeldEstimate(-3, 5)).toBe(0);
+  });
+});
+
 describe("break-even and target pricing", () => {
   it("break-even price yields exactly zero net profit when fed back in", () => {
     const rules = [paymentFee, pickPack];
@@ -287,6 +422,65 @@ describe("break-even and target pricing", () => {
     expect(Math.abs(atTarget.netMarginPct - ukSettings.targetMarginPct)).toBeLessThan(
       0.1,
     );
+  });
+
+  it("round-trips with every kind in the stack at once", () => {
+    // The must-keep check from MARGIN-MODEL.md step 3: feed the solved price
+    // back through the calculator and the margin lands on target. This is the
+    // only thing that catches an algebra slip in the generalised solver.
+    const rules: CostRule[] = [
+      paymentFee, // 1.75% of revenue
+      pickPack, // £0.45 per unit
+      { id: "duty", name: "Duty", kind: "PERCENT_OF_COST", value: 4.5, enabled: true },
+      { id: "ret", name: "Returns", kind: "RATE_TIMES_COST", value: 8, enabled: true },
+      { id: "ship", name: "Courier", kind: "FIXED_PER_ORDER", value: 3.99, enabled: true },
+      { id: "hold", name: "Storage", kind: "PER_DAY_HELD", value: 0.02, enabled: true },
+    ];
+    const costs = { unitCost: 60, freight: 4 };
+    const context = { unitsPerOrder: 2.2, daysHeld: 48 };
+
+    const first = calculateMargin({
+      price: 120,
+      costs,
+      rules,
+      settings: ukSettings,
+      context,
+    });
+
+    expect(first.targetPrice).not.toBeNull();
+    expect(first.breakEvenPrice).not.toBeNull();
+
+    const atTarget = calculateMargin({
+      price: first.targetPrice!,
+      costs,
+      rules,
+      settings: ukSettings,
+      context,
+    });
+    expect(
+      Math.abs(atTarget.netMarginPct - ukSettings.targetMarginPct),
+    ).toBeLessThan(0.1);
+
+    const atBreakEven = calculateMargin({
+      price: first.breakEvenPrice!,
+      costs,
+      rules,
+      settings: ukSettings,
+      context,
+    });
+    // The solved price is rounded to a penny, so residual profit up to a
+    // penny is the rounding quantum, not an algebra error.
+    expect(Math.abs(atBreakEven.netProfit)).toBeLessThanOrEqual(0.01);
+  });
+
+  it("solves with only cost-based percentages in play", () => {
+    // r = 0 here; the denominator must not be confused by cost-side rates.
+    const rules: CostRule[] = [
+      { id: "duty", name: "Duty", kind: "PERCENT_OF_COST", value: 10, enabled: true },
+    ];
+    const price = solvePriceForMargin(60, rules, usSettings, 40);
+    // netRev = 60 × 1.1 / 0.6 = 110
+    expect(price).toBe(110);
   });
 
   it("returns null when percentage costs plus target margin exceed 100%", () => {

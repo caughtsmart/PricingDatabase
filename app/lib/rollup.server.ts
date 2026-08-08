@@ -3,6 +3,7 @@ import { EMPTY_EXTRAS, getVariantExtrasMap, toCostInputs } from "./costs.server"
 import {
   aggregate,
   calculateMargin,
+  daysHeldEstimate,
   type AggregateTotals,
   type MarginResult,
 } from "./margin";
@@ -81,6 +82,15 @@ export async function buildRollup(shop: string): Promise<Rollup> {
         costs: toCostInputs(toNullableNumber(snapshot.unitCost), extras),
         rules: config.rules,
         settings: config.settings,
+        context: {
+          unitsPerOrder: config.avgUnitsPerOrder,
+          // Per-variant days of cover from the synced stock and 90-day sales,
+          // so holding-cost rules price dead stock honestly.
+          daysHeld: daysHeldEstimate(
+            snapshot.inventoryQuantity,
+            snapshot.unitsSold,
+          ),
+        },
       }),
     };
   });

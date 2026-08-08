@@ -32,11 +32,56 @@ export async function loader({ request }: LoaderFunctionArgs) {
     rules: config.rules,
     currencyCode: config.currencyCode,
     autoSyncEnabled: config.autoSyncEnabled,
+    avgUnitsPerOrder: config.avgUnitsPerOrder,
     syncHour: formatSyncHour(session.shop),
     detectedCountryCode: config.detectedCountryCode,
     needsRateConfirmation: config.needsRateConfirmation,
   };
 }
+
+/**
+ * The rule kinds a merchant can pick, with their bases said out loud.
+ *
+ * MARGIN-MODEL.md §2.3: a percentage is meaningless until it declares what it
+ * is a percentage *of*, so the base lives in the label — never in an
+ * assumption the merchant cannot see.
+ */
+export const COST_KIND_OPTIONS: Array<{
+  kind: CostRuleKind;
+  label: string;
+  hint: string;
+}> = [
+  {
+    kind: "PERCENT_OF_REVENUE",
+    label: "% of revenue (after tax)",
+    hint: "Payment fees, marketplace commission",
+  },
+  {
+    kind: "FIXED_PER_UNIT",
+    label: "Fixed amount per unit",
+    hint: "Pick and pack, retail packaging",
+  },
+  {
+    kind: "PERCENT_OF_COST",
+    label: "% of landed cost",
+    hint: "Import duty, supplier surcharge",
+  },
+  {
+    kind: "FIXED_PER_ORDER",
+    label: "Fixed amount per order",
+    hint: "Courier label, box — spread across your average basket",
+  },
+  {
+    kind: "RATE_TIMES_COST",
+    label: "Loss rate (% of units written off)",
+    hint: "Returns you cannot resell, breakage, theft",
+  },
+  {
+    kind: "PER_DAY_HELD",
+    label: "Amount per unit per day in stock",
+    hint: "Storage, money tied up — uses each product's stock and sales speed",
+  },
+];
 
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -87,12 +132,24 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: true, message: "Sync schedule updated." };
   }
 
+  if (intent === "basket") {
+    const avgUnitsPerOrder = parseNumber(formData.get("avgUnitsPerOrder"));
+    if (avgUnitsPerOrder < 1) {
+      return {
+        ok: false,
+        message: "An order always has at least one item, so use 1 or more.",
+      };
+    }
+    await updateShopSettings(session.shop, { avgUnitsPerOrder });
+    return { ok: true, message: "Basket size saved." };
+  }
+
   if (intent === "rule") {
     const name = String(formData.get("name") ?? "").trim();
     if (!name) return { ok: false, message: "Give the cost rule a name." };
 
     const kind = String(formData.get("kind")) as CostRuleKind;
-    if (kind !== "PERCENT_OF_REVENUE" && kind !== "FIXED_PER_UNIT") {
+    if (!COST_KIND_OPTIONS.some((option) => option.kind === kind)) {
       return { ok: false, message: "Unknown cost rule type." };
     }
 
@@ -102,6 +159,13 @@ export async function action({ request }: ActionFunctionArgs) {
       return {
         ok: false,
         message: "A percentage rule of 100% or more leaves nothing to sell.",
+      };
+    }
+    if (kind === "RATE_TIMES_COST" && value > 100) {
+      return {
+        ok: false,
+        message:
+          "A loss rate is the share of units written off, so it cannot be over 100%.",
       };
     }
 
@@ -130,6 +194,7 @@ export default function Settings() {
     rules,
     currencyCode,
     autoSyncEnabled,
+    avgUnitsPerOrder,
     syncHour,
     detectedCountryCode,
     needsRateConfirmation,
@@ -265,9 +330,29 @@ export default function Settings() {
       <s-section heading="Shop-wide cost rules">
         <s-paragraph>
           These apply to every sale on top of each product&rsquo;s landed cost —
-          payment fees, channel commission, pick and pack. Percentages are taken
-          from revenue after tax.
+          payment fees, duty, postage, returns. Every type says what its number
+          is measured against, because &ldquo;3%&rdquo; means very different
+          money depending on whether it is 3% of the price or 3% of the cost.
         </s-paragraph>
+
+        <s-box padding="base" borderWidth="base" borderRadius="base">
+          <Form method="post">
+            <input type="hidden" name="intent" value="basket" />
+            <s-stack direction="inline" gap="base" alignItems="end">
+              <s-number-field
+                name="avgUnitsPerOrder"
+                label="Average items per order"
+                min={1}
+                step={0.1}
+                details="Per-order costs such as postage are split across this many items. Your orders page shows the true figure."
+                defaultValue={String(avgUnitsPerOrder)}
+              />
+              <s-button type="submit" disabled={busy}>
+                Save
+              </s-button>
+            </s-stack>
+          </Form>
+        </s-box>
 
         {rules.map((rule) => (
           <s-box
@@ -282,10 +367,11 @@ export default function Settings() {
               <s-stack direction="inline" gap="base" alignItems="end">
                 <s-text-field name="name" label="Name" defaultValue={rule.name} />
                 <s-select name="kind" label="Type" value={rule.kind}>
-                  <s-option value="PERCENT_OF_REVENUE">% of revenue</s-option>
-                  <s-option value="FIXED_PER_UNIT">
-                    Fixed per unit ({currencyCode})
-                  </s-option>
+                  {COST_KIND_OPTIONS.map((option) => (
+                    <s-option key={option.kind} value={option.kind}>
+                      {option.label}
+                    </s-option>
+                  ))}
                 </s-select>
                 <s-number-field
                   name="value"
@@ -320,10 +406,11 @@ export default function Settings() {
             <s-stack direction="inline" gap="base" alignItems="end">
               <s-text-field name="name" label="Name" placeholder="Channel fee" />
               <s-select name="kind" label="Type" value="PERCENT_OF_REVENUE">
-                <s-option value="PERCENT_OF_REVENUE">% of revenue</s-option>
-                <s-option value="FIXED_PER_UNIT">
-                  Fixed per unit ({currencyCode})
-                </s-option>
+                {COST_KIND_OPTIONS.map((option) => (
+                  <s-option key={option.kind} value={option.kind}>
+                    {option.label}
+                  </s-option>
+                ))}
               </s-select>
               <s-number-field name="value" label="Value" min={0} step={0.01} />
               <s-checkbox name="enabled" label="Enabled" defaultChecked />

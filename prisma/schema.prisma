@@ -45,6 +45,11 @@ model ShopSettings {
   warnMarginPct     Decimal @default(20) @db.Decimal(6, 3)
   criticalMarginPct Decimal @default(10) @db.Decimal(6, 3)
 
+  /// Average units per order. Divides FIXED_PER_ORDER cost rules so a
+  /// per-order charge lands fairly on each unit. 1 is the safe default:
+  /// per-order costs then behave like per-unit costs rather than vanishing.
+  avgUnitsPerOrder Decimal @default(1) @db.Decimal(8, 2)
+
   /// Set once the default cost rules have been seeded, so we never re-seed
   /// over a merchant who has deliberately deleted them.
   defaultsSeeded Boolean @default(false)
@@ -80,6 +85,14 @@ enum CostRuleKind {
   PERCENT_OF_REVENUE
   /// A flat amount per unit sold, e.g. pick-and-pack labour.
   FIXED_PER_UNIT
+  /// A percentage of landed unit cost, e.g. import duty.
+  PERCENT_OF_COST
+  /// A flat amount per order, spread across the average basket, e.g. courier.
+  FIXED_PER_ORDER
+  /// A write-off rate times landed cost, e.g. returns, breakage, shrinkage.
+  RATE_TIMES_COST
+  /// A holding cost per unit per day in stock, e.g. storage, cost of capital.
+  PER_DAY_HELD
 }
 
 /// Shop-wide costs that apply to every sale, on top of per-variant landed cost.

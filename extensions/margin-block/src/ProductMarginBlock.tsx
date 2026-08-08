@@ -25,12 +25,38 @@ interface VariantExtras {
   notes: string | null;
 }
 
+type CostRuleKind =
+  | "PERCENT_OF_REVENUE"
+  | "FIXED_PER_UNIT"
+  | "PERCENT_OF_COST"
+  | "FIXED_PER_ORDER"
+  | "RATE_TIMES_COST"
+  | "PER_DAY_HELD";
+
 interface AppliedCost {
   id: string;
   name: string;
-  kind: "PERCENT_OF_REVENUE" | "FIXED_PER_UNIT";
+  kind: CostRuleKind;
   value: number;
   amount: number;
+}
+
+type WaterfallTone = "neutral" | "info" | "warning" | "critical" | "success";
+
+interface WaterfallSegment {
+  key: string;
+  label: string;
+  amount: number;
+  share: number;
+  kind: "tax" | "cost" | "profit";
+  tone: WaterfallTone;
+}
+
+interface Waterfall {
+  price: number;
+  segments: WaterfallSegment[];
+  isLoss: boolean;
+  hasCostData: boolean;
 }
 
 type MarginStatus = "unknown" | "loss" | "critical" | "warn" | "healthy";
@@ -66,6 +92,7 @@ interface VariantPayload {
   inventoryQuantity: number;
   extras: VariantExtras;
   margin: MarginResult;
+  waterfall: Waterfall;
 }
 
 interface MarginApiPayload {
@@ -342,6 +369,14 @@ function ProductMarginBlock() {
           </s-banner>
         ) : null}
 
+        {/* The money waterfall: the price as one bar, each cost taking its
+            bite, profit (or loss) last. Proportion lives in the bar; status
+            colour lives in the detail text — the extension sandbox only
+            allows neutral background fills (transparent/base/subdued/strong),
+            so the DESIGN.md ambition of a coloured profit segment is carried
+            by the selected-segment detail and the badge above instead. */}
+        <MoneyWaterfall waterfall={selected.waterfall} fmt={fmt} />
+
         {/* The full walk from price down to profit. */}
         <s-box padding="base" borderWidth="base" borderRadius="base">
           <s-stack direction="block" gap="small-400">
@@ -363,11 +398,7 @@ function ProductMarginBlock() {
             {margin.appliedCosts.map((cost) => (
               <Row
                 key={cost.id}
-                label={
-                  cost.kind === "PERCENT_OF_REVENUE"
-                    ? `${cost.name} (${cost.value}%)`
-                    : cost.name
-                }
+                label={ruleLabel(cost)}
                 value={`− ${fmt(cost.amount)}`}
                 subdued
               />
@@ -452,6 +483,100 @@ function ProductMarginBlock() {
         </s-stack>
       </s-stack>
     </s-admin-block>
+  );
+}
+
+/**
+ * A rule's display label, always saying what its number is measured against.
+ * "3%" means very different money against the price than against the cost.
+ */
+function ruleLabel(cost: AppliedCost): string {
+  switch (cost.kind) {
+    case "PERCENT_OF_REVENUE":
+      return `${cost.name} (${cost.value}% of revenue)`;
+    case "PERCENT_OF_COST":
+      return `${cost.name} (${cost.value}% of cost)`;
+    case "RATE_TIMES_COST":
+      return `${cost.name} (${cost.value}% loss rate)`;
+    case "FIXED_PER_ORDER":
+      return `${cost.name} (per order)`;
+    case "PER_DAY_HELD":
+      return `${cost.name} (per day in stock)`;
+    default:
+      return cost.name;
+  }
+}
+
+/** Maps a waterfall tone onto the s-text tone scale. */
+function textTone(
+  tone: WaterfallTone,
+): "neutral" | "info" | "warning" | "critical" | "success" {
+  return tone === "neutral" ? "neutral" : tone;
+}
+
+function MoneyWaterfall({
+  waterfall,
+  fmt,
+}: {
+  waterfall: Waterfall;
+  fmt: (value: number) => string;
+}) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  if (waterfall.price <= 0 || waterfall.segments.length === 0) return null;
+
+  // Absolute shares, floored so a sliver of a segment is still tappable.
+  // DESIGN.md says never to squeeze a label into a sliver — labels live in
+  // the detail line below, so the floor only buys touch area.
+  const drawable = waterfall.segments.map((segment) => ({
+    ...segment,
+    width: Math.max(Math.abs(segment.share), 0.04),
+  }));
+  const columns = drawable
+    .map((segment) => `${segment.width.toFixed(4)}fr`)
+    .join(" ");
+
+  // Neutral fills are all the sandbox offers, so adjacent segments alternate
+  // shades and profit takes the strongest.
+  const shadeFor = (segment: WaterfallSegment, index: number) =>
+    segment.kind === "profit" ? "strong" : index % 2 === 0 ? "subdued" : "base";
+
+  const selected =
+    waterfall.segments.find((segment) => segment.key === selectedKey) ?? null;
+  const profit = waterfall.segments[waterfall.segments.length - 1];
+
+  return (
+    <s-stack direction="block" gap="small-500">
+      <s-grid gridTemplateColumns={columns}>
+        {drawable.map((segment, index) => (
+          <s-clickable
+            key={segment.key}
+            background={shadeFor(segment, index)}
+            minBlockSize="14px"
+            accessibilityLabel={`${segment.label}: ${fmt(segment.amount)}`}
+            onClick={() =>
+              setSelectedKey((current) =>
+                current === segment.key ? null : segment.key,
+              )
+            }
+          />
+        ))}
+      </s-grid>
+
+      {selected ? (
+        <s-text tone={textTone(selected.tone)}>
+          {selected.label}: {fmt(selected.amount)} ·{" "}
+          {(selected.share * 100).toFixed(1)}% of the price
+        </s-text>
+      ) : (
+        <s-text color="subdued">
+          Every part of the price, in order — tap a segment.{" "}
+          {waterfall.isLoss
+            ? `Costs overrun the price by ${fmt(Math.abs(profit.amount))} a unit.`
+            : `The last block is your ${profit.label.toLowerCase()}.`}
+        </s-text>
+      )}
+    </s-stack>
   );
 }
 

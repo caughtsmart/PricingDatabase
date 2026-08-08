@@ -25,15 +25,80 @@ export type CostRuleKind =
   /** A percentage of net (tax-exclusive) revenue, e.g. a 1.75% payment fee. */
   | "PERCENT_OF_REVENUE"
   /** A flat amount charged per unit sold, e.g. £0.45 pick-and-pack. */
-  | "FIXED_PER_UNIT";
+  | "FIXED_PER_UNIT"
+  /**
+   * A percentage of landed unit cost, e.g. import duty. Duty modelled as a
+   * fixed amount goes silently wrong on every price break or FX move; as a
+   * percentage of cost it tracks them.
+   */
+  | "PERCENT_OF_COST"
+  /**
+   * A flat amount per order, divided by the shop's average basket size —
+   * courier label, box, pick fee. Charged once however many units ship.
+   */
+  | "FIXED_PER_ORDER"
+  /**
+   * A loss rate: the probability of writing a unit off (returns, breakage,
+   * shrinkage) times its landed cost. Mathematically identical to
+   * PERCENT_OF_COST — kept as its own kind because "8% of units come back"
+   * and "4.5% duty" are different facts a merchant should record separately.
+   */
+  | "RATE_TIMES_COST"
+  /**
+   * A holding cost per unit per day in stock — storage, capital tied up.
+   * Multiplied by the days a unit typically waits before selling.
+   */
+  | "PER_DAY_HELD";
 
 export interface CostRule {
   id: string;
   name: string;
   kind: CostRuleKind;
-  /** Percentage points for PERCENT_OF_REVENUE, currency amount for FIXED_PER_UNIT. */
+  /**
+   * Percentage points for the percent/rate kinds, a currency amount for the
+   * fixed and per-day kinds.
+   */
   value: number;
   enabled: boolean;
+}
+
+/**
+ * Facts about how the shop sells, needed by the order- and time-based kinds.
+ *
+ * Defaults are chosen so a missing context is harmless rather than wrong:
+ * one unit per order leaves FIXED_PER_ORDER behaving like FIXED_PER_UNIT, and
+ * zero days held makes PER_DAY_HELD contribute nothing until the caller can
+ * say how long stock actually sits.
+ */
+export interface MarginContext {
+  /** Average units per order. Divides FIXED_PER_ORDER rules. Clamped to ≥ 1. */
+  unitsPerOrder?: number;
+  /** Days a unit typically waits in stock before selling. */
+  daysHeld?: number;
+}
+
+/**
+ * Estimates how long a unit sits in stock before it sells.
+ *
+ * Days-of-cover — stock on hand divided by daily sales rate — which under
+ * steady FIFO turnover is also the average age of a unit at the moment it
+ * sells. Capped because the estimate explodes as sales approach zero, and a
+ * variant with stock but no sales gets the cap rather than zero: dead stock
+ * carrying a year of holding cost is the truthful answer, not the bug.
+ */
+export function daysHeldEstimate(
+  inventoryQuantity: number,
+  unitsSoldInWindow: number,
+  windowDays = 90,
+  capDays = 365,
+): number {
+  const stock = Math.max(0, num(inventoryQuantity));
+  if (stock <= 0) return 0;
+
+  const sold = Math.max(0, num(unitsSoldInWindow));
+  if (sold <= 0 || windowDays <= 0) return capDays;
+
+  return Math.min(capDays, stock / (sold / windowDays));
 }
 
 /** Per-variant cost components that sit on top of Shopify's unit cost. */
@@ -67,6 +132,7 @@ export interface MarginInput {
   costs: VariantCostInputs;
   rules: CostRule[];
   settings: MarginSettings;
+  context?: MarginContext;
 }
 
 export type MarginStatus =
@@ -182,45 +248,112 @@ function activeRules(rules: CostRule[]): CostRule[] {
   return rules.filter((rule) => rule.enabled);
 }
 
-/** Total percentage-of-revenue rate across all enabled rules. */
-function percentRate(rules: CostRule[]): number {
-  return activeRules(rules)
-    .filter((rule) => rule.kind === "PERCENT_OF_REVENUE")
-    .reduce((total, rule) => total + num(rule.value), 0);
+/** An order always contains at least one unit; 0 or junk must not divide by zero. */
+function clampUnitsPerOrder(value: number | undefined): number {
+  const parsed = num(value);
+  return parsed >= 1 ? parsed : 1;
 }
 
-/** Total flat per-unit charge across all enabled rules. */
-function fixedPerUnit(rules: CostRule[]): number {
+/**
+ * The currency amount a single rule takes from a single sale.
+ *
+ * Every kind resolves against its declared base — revenue, landed cost, the
+ * order, or time held. A percentage that does not say what it is a percentage
+ * *of* is a silent 2–4% error waiting to happen, so the base lives in the kind
+ * itself rather than in an assumption at the call site.
+ */
+function resolveRuleAmount(
+  rule: CostRule,
+  netRevenue: number,
+  landedUnitCost: number,
+  context: MarginContext,
+): number {
+  const value = num(rule.value);
+
+  switch (rule.kind) {
+    case "PERCENT_OF_REVENUE":
+      return (netRevenue * value) / 100;
+    case "PERCENT_OF_COST":
+    case "RATE_TIMES_COST":
+      // Both are a share of landed cost; RATE_TIMES_COST reads the value as a
+      // write-off probability (losing value% of units costs value% of a unit's
+      // landed cost per sale, in expectation).
+      return (landedUnitCost * value) / 100;
+    case "FIXED_PER_UNIT":
+      return value;
+    case "FIXED_PER_ORDER":
+      return value / clampUnitsPerOrder(context.unitsPerOrder);
+    case "PER_DAY_HELD":
+      return value * Math.max(0, num(context.daysHeld));
+  }
+}
+
+/** Σ percent-of-revenue rates, as a fraction. The `r` in the solver. */
+function revenueRate(rules: CostRule[]): number {
   return activeRules(rules)
-    .filter((rule) => rule.kind === "FIXED_PER_UNIT")
-    .reduce((total, rule) => total + num(rule.value), 0);
+    .filter((rule) => rule.kind === "PERCENT_OF_REVENUE")
+    .reduce((total, rule) => total + num(rule.value), 0) / 100;
+}
+
+/** Σ percent-of-cost and loss rates, as a fraction. The `c` in the solver. */
+function costRate(rules: CostRule[]): number {
+  return activeRules(rules)
+    .filter(
+      (rule) =>
+        rule.kind === "PERCENT_OF_COST" || rule.kind === "RATE_TIMES_COST",
+    )
+    .reduce((total, rule) => total + num(rule.value), 0) / 100;
+}
+
+/** Σ of every charge that does not scale with price. The `fixed` in the solver. */
+function fixedCharges(rules: CostRule[], context: MarginContext): number {
+  return activeRules(rules)
+    .filter(
+      (rule) =>
+        rule.kind === "FIXED_PER_UNIT" ||
+        rule.kind === "FIXED_PER_ORDER" ||
+        rule.kind === "PER_DAY_HELD",
+    )
+    // netRevenue is irrelevant to these kinds, so 0 is safe here.
+    .reduce(
+      (total, rule) => total + resolveRuleAmount(rule, 0, 0, context),
+      0,
+    );
 }
 
 /**
  * Solves for the gross price that yields `desiredMarginPct` net margin.
  *
- * Starting from `netProfit = netRev − landed − netRev·r − fixed` and requiring
- * `netProfit = desiredMargin · netRev`:
+ * Starting from
  *
- *   netRev · (1 − r − m) = landed + fixed
- *   netRev = (landed + fixed) / (1 − r − m)
+ *   netProfit = netRev − landed − netRev·r − landed·c − fixed
  *
- * Returns null when the denominator is zero or negative, which means the
- * percentage costs plus the desired margin consume 100% or more of revenue —
- * no finite price gets you there.
+ * (r = percent-of-revenue rates, c = percent-of-cost and loss rates, fixed =
+ * per-unit + per-order ÷ basket + per-day × days held) and requiring
+ * `netProfit = m · netRev`:
+ *
+ *   netRev · (1 − r − m) = landed · (1 + c) + fixed
+ *   netRev = (landed · (1 + c) + fixed) / (1 − r − m)
+ *
+ * Still closed form; break-even is `m = 0`. Returns null when the denominator
+ * is zero or negative, which means the percentage-of-revenue costs plus the
+ * desired margin consume 100% or more of revenue — no finite price gets there.
  */
 export function solvePriceForMargin(
   landedUnitCost: number,
   rules: CostRule[],
   settings: MarginSettings,
   desiredMarginPct: number,
+  context: MarginContext = {},
 ): number | null {
-  const r = percentRate(rules) / 100;
+  const r = revenueRate(rules);
   const m = num(desiredMarginPct) / 100;
   const denominator = 1 - r - m;
   if (denominator <= 1e-9) return null;
 
-  const netRevenue = (landedUnitCost + fixedPerUnit(rules)) / denominator;
+  const netRevenue =
+    (landedUnitCost * (1 + costRate(rules)) + fixedCharges(rules, context)) /
+    denominator;
   if (!Number.isFinite(netRevenue) || netRevenue < 0) return null;
 
   return roundMoney(toGrossPrice(netRevenue, settings));
@@ -248,6 +381,7 @@ function classify(
  */
 export function calculateMargin(input: MarginInput): MarginResult {
   const { settings, rules } = input;
+  const context = input.context ?? {};
 
   const grossRevenue = num(input.price);
   const netRevenue = toNetRevenue(grossRevenue, settings);
@@ -267,9 +401,7 @@ export function calculateMargin(input: MarginInput): MarginResult {
     kind: rule.kind,
     value: num(rule.value),
     amount: roundMoney(
-      rule.kind === "PERCENT_OF_REVENUE"
-        ? (netRevenue * num(rule.value)) / 100
-        : num(rule.value),
+      resolveRuleAmount(rule, netRevenue, landedUnitCost, context),
     ),
   }));
 
@@ -316,12 +448,19 @@ export function calculateMargin(input: MarginInput): MarginResult {
     netMarginPct: roundPct(netMarginPct),
     markupPct: roundPct(markupPct),
 
-    breakEvenPrice: solvePriceForMargin(landedUnitCost, rules, settings, 0),
+    breakEvenPrice: solvePriceForMargin(
+      landedUnitCost,
+      rules,
+      settings,
+      0,
+      context,
+    ),
     targetPrice: solvePriceForMargin(
       landedUnitCost,
       rules,
       settings,
       settings.targetMarginPct,
+      context,
     ),
 
     discountPct,

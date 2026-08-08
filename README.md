@@ -26,6 +26,8 @@ close that gap.
 **On the product page** (admin UI extension, `admin.product-details.block.render`)
 
 - Net margin, profit per unit and a health badge for the selected variant
+- The money waterfall: the price as one bar, each cost taking its bite,
+  profit last — tap a segment to inspect it
 - A full walk from price → tax → landed cost → fees → net profit
 - Break-even price, and the price needed to hit your target margin
 - Editable cost fields: unit cost (written back to Shopify's own "Cost per
@@ -45,7 +47,11 @@ close that gap.
 ```
 net revenue   = price ÷ (1 + tax rate)        # when prices include tax
 landed cost   = Shopify unit cost + freight + duty + packaging + handling + other
-variable cost = net revenue × Σ(% rules) + Σ(fixed-per-unit rules)
+variable cost = net revenue × Σ(% of revenue)
+              + landed cost × Σ(% of cost + loss rates)
+              + Σ(fixed per unit)
+              + Σ(fixed per order ÷ average basket)
+              + Σ(per day held × days of cover)
 net profit    = net revenue − landed cost − variable cost
 net margin    = net profit ÷ net revenue
 ```

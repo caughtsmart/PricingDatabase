@@ -53,6 +53,8 @@ export interface ShopConfig {
   currencyCode: string;
   lastSyncedAt: Date | null;
   autoSyncEnabled: boolean;
+  /** Average units per order; divides FIXED_PER_ORDER cost rules. */
+  avgUnitsPerOrder: number;
   /** Null until the merchant has confirmed the detected tax setup. */
   onboardedAt: Date | null;
   detectedCountryCode: string | null;
@@ -104,6 +106,7 @@ export async function getShopConfig(shop: string): Promise<ShopConfig> {
     currencyCode: record.currencyCode,
     lastSyncedAt: record.lastSyncedAt,
     autoSyncEnabled: record.autoSyncEnabled,
+    avgUnitsPerOrder: toNumber(record.avgUnitsPerOrder) || 1,
     onboardedAt: record.onboardedAt,
     detectedCountryCode: record.detectedCountryCode,
     needsRateConfirmation: record.needsRateConfirmation,
@@ -132,6 +135,7 @@ export interface UpdateSettingsInput {
   warnMarginPct?: number;
   criticalMarginPct?: number;
   autoSyncEnabled?: boolean;
+  avgUnitsPerOrder?: number;
 }
 
 export async function updateShopSettings(

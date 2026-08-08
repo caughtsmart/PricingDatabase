@@ -9,12 +9,18 @@ import {
   EMPTY_EXTRAS,
   type VariantExtras,
 } from "../lib/costs.server";
+import prisma from "../db.server";
 import {
   fetchProductMarginData,
   updateUnitCost,
   type GraphQLClient,
 } from "../lib/catalog.server";
-import { calculateMargin, type MarginResult } from "../lib/margin";
+import {
+  calculateMargin,
+  daysHeldEstimate,
+  type MarginResult,
+} from "../lib/margin";
+import { buildWaterfall, type Waterfall } from "../lib/waterfall";
 import { getShopConfig } from "../lib/settings.server";
 import { authenticate } from "../shopify.server";
 
@@ -41,6 +47,8 @@ export interface VariantMarginPayload {
   inventoryQuantity: number;
   extras: VariantExtras;
   margin: MarginResult;
+  /** Pre-built money waterfall segments; the widget renders, never computes. */
+  waterfall: Waterfall;
 }
 
 export interface MarginApiPayload {
@@ -77,9 +85,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return cors(jsonResponse({ error: "Product not found" }, 404));
   }
 
-  const extrasMap = await getVariantExtrasMap(
-    session.shop,
-    product.variants.map((variant) => variant.id),
+  const variantIds = product.variants.map((variant) => variant.id);
+  const [extrasMap, snapshots] = await Promise.all([
+    getVariantExtrasMap(session.shop, variantIds),
+    // The live product query carries no sales history; the synced snapshot
+    // does. Holding-cost rules need it to estimate days in stock.
+    prisma.variantSnapshot.findMany({
+      where: { shop: session.shop, variantId: { in: variantIds.map(toNumericId) } },
+      select: { variantId: true, unitsSold: true },
+    }),
+  ]);
+  const unitsSoldByVariant = new Map(
+    snapshots.map((snapshot) => [snapshot.variantId, snapshot.unitsSold]),
   );
 
   const payload: MarginApiPayload = {
@@ -91,8 +108,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .filter((rule) => rule.enabled)
       .map((rule) => rule.name),
     variants: product.variants.map((variant) => {
-      const extras =
-        extrasMap.get(toNumericId(variant.id)) ?? { ...EMPTY_EXTRAS };
+      const numericId = toNumericId(variant.id);
+      const extras = extrasMap.get(numericId) ?? { ...EMPTY_EXTRAS };
+      const margin = calculateMargin({
+        price: variant.price,
+        compareAtPrice: variant.compareAtPrice,
+        costs: toCostInputs(variant.unitCost, extras),
+        rules: config.rules,
+        settings: config.settings,
+        context: {
+          unitsPerOrder: config.avgUnitsPerOrder,
+          // No snapshot yet (never synced) → 0 days: holding rules stay
+          // silent rather than guessing.
+          daysHeld: unitsSoldByVariant.has(numericId)
+            ? daysHeldEstimate(
+                variant.inventoryQuantity,
+                unitsSoldByVariant.get(numericId) ?? 0,
+              )
+            : 0,
+        },
+      });
       return {
         variantId: variant.id,
         inventoryItemId: variant.inventoryItemId,
@@ -101,13 +136,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         price: variant.price,
         inventoryQuantity: variant.inventoryQuantity,
         extras,
-        margin: calculateMargin({
-          price: variant.price,
-          compareAtPrice: variant.compareAtPrice,
-          costs: toCostInputs(variant.unitCost, extras),
-          rules: config.rules,
-          settings: config.settings,
-        }),
+        margin,
+        waterfall: buildWaterfall(margin),
       };
     }),
   };
@@ -188,7 +218,18 @@ export async function action({ request }: ActionFunctionArgs) {
   const config = await getShopConfig(session.shop);
   // Re-read rather than trusting the request body, so the response reflects
   // exactly what was persisted.
-  const savedExtras = await getVariantExtras(session.shop, body.variantId);
+  const [savedExtras, snapshot] = await Promise.all([
+    getVariantExtras(session.shop, body.variantId),
+    prisma.variantSnapshot.findUnique({
+      where: {
+        shop_variantId: {
+          shop: session.shop,
+          variantId: toNumericId(body.variantId),
+        },
+      },
+      select: { inventoryQuantity: true, unitsSold: true },
+    }),
+  ]);
 
   const margin = calculateMargin({
     price: sanitiseAmount(body.price),
@@ -199,6 +240,12 @@ export async function action({ request }: ActionFunctionArgs) {
     ),
     rules: config.rules,
     settings: config.settings,
+    context: {
+      unitsPerOrder: config.avgUnitsPerOrder,
+      daysHeld: snapshot
+        ? daysHeldEstimate(snapshot.inventoryQuantity, snapshot.unitsSold)
+        : 0,
+    },
   });
 
   return cors(
@@ -207,6 +254,7 @@ export async function action({ request }: ActionFunctionArgs) {
       userErrors,
       extras: savedExtras,
       margin,
+      waterfall: buildWaterfall(margin),
     }),
   );
 }

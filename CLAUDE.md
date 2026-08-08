@@ -141,8 +141,11 @@ test enforces "moving up never hides". §2.5 confidence is in too:
 into the headline's "likely X–Y%" band and the ranked "tighten this up" list.
 Per-component `base` overrides are live: a percent block declares whether it
 is measured against the goods cost, net revenue or the gross price, and the
-price-linked ones ride the solver's `r` term. Still open, per the doc:
-product/template scope.
+price-linked ones ride the solver's `r` term. Scope is live too: a block
+belongs to one variant or (via `variantId` null) to every variant of its
+product — merged server-side in `costs.server.ts`, split back by scope on
+save. The doc's roadmap is complete; a named template library across
+products remains future work.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding
 any UI.

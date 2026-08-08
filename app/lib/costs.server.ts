@@ -2,9 +2,11 @@ import { randomUUID } from "crypto";
 
 import prisma from "../db.server";
 import {
+  normaliseScopes,
   type ComponentBase,
   type ComponentConfidence,
   type ComponentKind,
+  type ComponentScope,
   type CostComponentInput,
 } from "./components";
 import { toNumber } from "./settings.server";
@@ -82,17 +84,21 @@ export function sanitiseComponents(raw: unknown): CostComponentInput[] {
         BASES.includes(candidate.base as ComponentBase)
           ? (candidate.base as ComponentBase)
           : "LANDED_COST",
+      scope: candidate.scope === "PRODUCT" ? "PRODUCT" : "VARIANT",
       confidence,
       enabled: candidate.enabled !== false,
       sortOrder: out.length,
     });
   }
-  return out;
+  // A parent link across the variant/product boundary cannot be stored
+  // coherently; sever it rather than letting it dangle.
+  return normaliseScopes(out);
 }
 
 function rowToInput(row: {
   id: string;
   parentId: string | null;
+  variantId: string | null;
   label: string;
   kind: string;
   base: string;
@@ -104,6 +110,8 @@ function rowToInput(row: {
   return {
     id: row.id,
     parentId: row.parentId,
+    // Scope is not a column: a row with no variantId IS a product block.
+    scope: row.variantId ? "VARIANT" : "PRODUCT",
     label: row.label,
     // The DB enum is wider than the variant-level union (it is shared with
     // CostRule); saveComponents only ever writes variant kinds, so narrowing
@@ -125,40 +133,87 @@ function rowToInput(row: {
   };
 }
 
+/**
+ * A variant's *effective* blocks: the product's shared blocks first, then
+ * the variant's own. One merged list is what resolution, the band and the
+ * widget all consume — scope is a storage detail they can see but need not
+ * understand.
+ */
 export async function getComponents(
   shop: string,
   variantId: string,
+  productId: string,
 ): Promise<CostComponentInput[]> {
+  const numericVariantId = toNumericId(variantId);
+  const numericProductId = toNumericId(productId);
   const rows = await prisma.costComponent.findMany({
-    where: { shop, variantId: toNumericId(variantId) },
+    where: {
+      shop,
+      OR: [
+        { variantId: numericVariantId },
+        { productId: numericProductId, variantId: null },
+      ],
+    },
     orderBy: { sortOrder: "asc" },
   });
-  return rows.map(rowToInput);
+  return [
+    ...rows.filter((row) => !row.variantId),
+    ...rows.filter((row) => row.variantId),
+  ].map(rowToInput);
 }
 
 /** Bulk variant of {@link getComponents}, keyed by numeric variant id. */
 export async function getComponentsMap(
   shop: string,
-  variantIds: string[],
+  keys: Array<{ variantId: string; productId: string }>,
 ): Promise<Map<string, CostComponentInput[]>> {
-  const ids = variantIds.map(toNumericId);
+  const variantIds = keys.map((key) => toNumericId(key.variantId));
+  const productIds = Array.from(
+    new Set(keys.map((key) => toNumericId(key.productId))),
+  );
   const rows = await prisma.costComponent.findMany({
-    where: { shop, variantId: { in: ids } },
+    where: {
+      shop,
+      OR: [
+        { variantId: { in: variantIds } },
+        { productId: { in: productIds }, variantId: null },
+      ],
+    },
     orderBy: { sortOrder: "asc" },
   });
 
-  const map = new Map<string, CostComponentInput[]>();
+  const byVariant = new Map<string, CostComponentInput[]>();
+  const byProduct = new Map<string, CostComponentInput[]>();
   for (const row of rows) {
-    if (!row.variantId) continue;
-    const list = map.get(row.variantId) ?? [];
-    list.push(rowToInput(row));
-    map.set(row.variantId, list);
+    if (row.variantId) {
+      const list = byVariant.get(row.variantId) ?? [];
+      list.push(rowToInput(row));
+      byVariant.set(row.variantId, list);
+    } else if (row.productId) {
+      const list = byProduct.get(row.productId) ?? [];
+      list.push(rowToInput(row));
+      byProduct.set(row.productId, list);
+    }
+  }
+
+  const map = new Map<string, CostComponentInput[]>();
+  for (const key of keys) {
+    const variantId = toNumericId(key.variantId);
+    map.set(variantId, [
+      ...(byProduct.get(toNumericId(key.productId)) ?? []),
+      ...(byVariant.get(variantId) ?? []),
+    ]);
   }
   return map;
 }
 
 /**
- * Replaces a variant's blocks wholesale.
+ * Replaces a variant's effective blocks wholesale.
+ *
+ * The submitted list is split by scope: VARIANT blocks are rewritten for
+ * this variant, PRODUCT blocks for the whole product — so a save from any
+ * variant's widget updates the shared blocks everywhere, which is exactly
+ * what "every variant of this product" promises.
  *
  * Ids are regenerated server-side — client-supplied ids are only trusted as
  * *references* (parentId links within the submitted list), never as primary
@@ -179,27 +234,43 @@ export async function saveComponents(
     components.map((component) => [component.id, randomUUID()]),
   );
 
+  const toRow = (component: CostComponentInput) => ({
+    id: idMap.get(component.id)!,
+    shop,
+    variantId: component.scope === "PRODUCT" ? null : numericVariantId,
+    productId: numericProductId,
+    parentId: component.parentId
+      ? (idMap.get(component.parentId) ?? null)
+      : null,
+    label: component.label,
+    kind: component.kind,
+    base: component.base ?? "LANDED_COST",
+    value: component.value,
+    confidence: component.confidence ?? "ESTIMATED",
+    enabled: component.enabled !== false,
+  });
+
+  const productBlocks = components.filter(
+    (component) => component.scope === "PRODUCT",
+  );
+  const variantBlocks = components.filter(
+    (component) => component.scope !== "PRODUCT",
+  );
+
   await prisma.$transaction([
     prisma.costComponent.deleteMany({
-      where: { shop, variantId: numericVariantId },
+      where: {
+        shop,
+        OR: [
+          { variantId: numericVariantId },
+          { productId: numericProductId, variantId: null },
+        ],
+      },
     }),
     prisma.costComponent.createMany({
-      data: components.map((component, index) => ({
-        id: idMap.get(component.id)!,
-        shop,
-        variantId: numericVariantId,
-        productId: numericProductId,
-        parentId: component.parentId
-          ? (idMap.get(component.parentId) ?? null)
-          : null,
-        label: component.label,
-        kind: component.kind,
-        base: component.base ?? "LANDED_COST",
-        value: component.value,
-        confidence: component.confidence ?? "ESTIMATED",
-        enabled: component.enabled !== false,
-        sortOrder: index,
-      })),
+      data: [...productBlocks.map(toRow), ...variantBlocks.map(toRow)].map(
+        (row, index) => ({ ...row, sortOrder: index }),
+      ),
     }),
   ]);
 }

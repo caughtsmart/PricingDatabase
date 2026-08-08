@@ -124,7 +124,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const variantIds = product.variants.map((variant) => variant.id);
   const [componentsMap, snapshots] = await Promise.all([
-    getComponentsMap(session.shop, variantIds),
+    getComponentsMap(
+      session.shop,
+      product.variants.map((variant) => ({
+        variantId: variant.id,
+        productId: product.productId,
+      })),
+    ),
     // The live product query carries no sales history; the synced snapshot
     // does. Holding-cost rules need it to estimate days in stock.
     prisma.variantSnapshot.findMany({
@@ -362,7 +368,7 @@ export async function action({ request }: ActionFunctionArgs) {
   // Re-read rather than trusting the request body, so the response reflects
   // exactly what was persisted.
   const [savedComponents, snapshot] = await Promise.all([
-    getComponents(session.shop, body.variantId),
+    getComponents(session.shop, body.variantId, body.productId),
     prisma.variantSnapshot.findUnique({
       where: {
         shop_variantId: {

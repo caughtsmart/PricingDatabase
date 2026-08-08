@@ -57,7 +57,10 @@ export async function buildRollup(shop: string): Promise<Rollup> {
 
   const componentsMap = await getComponentsMap(
     shop,
-    snapshots.map((snapshot) => snapshot.variantId),
+    snapshots.map((snapshot) => ({
+      variantId: snapshot.variantId,
+      productId: snapshot.productId,
+    })),
   );
 
   const lines: RollupLine[] = snapshots.map((snapshot) => {

@@ -2,8 +2,8 @@
 #
 # `client_id` and `application_url` are filled in by `shopify app config link`
 # / `shopify app dev`. They are intentionally left blank in source control.
-name = "Margin Lens"
-handle = "margin-lens"
+name = "CogsPilot"
+handle = "cogspilot"
 application_url = "https://example.com"
 embedded = true
 

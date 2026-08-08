@@ -191,7 +191,7 @@ export default function Dashboard() {
         <s-section>
           <s-banner tone="info" heading="You're on the free plan">
             <s-paragraph>
-              Margin Lens is running without a subscription.{" "}
+              CogsPilot is running without a subscription.{" "}
               <s-link href={app.planUrl} target="_top">
                 See plans
               </s-link>

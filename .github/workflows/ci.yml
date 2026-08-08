@@ -17,7 +17,7 @@ concurrency:
 env:
   # Prisma needs a datasource URL to generate a client, but never connects for
   # it. The migrations job overrides this with a real database.
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marginlens?schema=public
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cogspilot?schema=public
 
 jobs:
   verify:
@@ -69,7 +69,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: marginlens
+          POSTGRES_DB: cogspilot
         ports:
           - 5432:5432
         options: >-
@@ -114,8 +114,8 @@ jobs:
               max: 2,
             });
             await boss.start();
-            await boss.createQueue("margin-lens.sync");
-            await boss.createQueue("margin-lens.nightly");
+            await boss.createQueue("cogspilot.sync");
+            await boss.createQueue("cogspilot.nightly");
             await boss.stop({ graceful: false });
             console.log("queue OK");
           '

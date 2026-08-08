@@ -23,8 +23,8 @@ import { unauthenticated } from "./shopify.server";
  * model of its own.
  */
 
-export const SYNC_QUEUE = "margin-lens.sync";
-export const NIGHTLY_QUEUE = "margin-lens.nightly";
+export const SYNC_QUEUE = "cogspilot.sync";
+export const NIGHTLY_QUEUE = "cogspilot.nightly";
 
 /**
  * The scheduler ticks hourly, not nightly.

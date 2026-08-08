@@ -33,7 +33,7 @@ import type { GraphQLClient } from "./catalog.server";
  * Must match `handle` in shopify.app.toml — it forms part of the plan page URL.
  * Overridable by env so a differently-handled staging app still links correctly.
  */
-export const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || "margin-lens";
+export const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || "cogspilot";
 
 export const ACTIVE_SUBSCRIPTION_QUERY = `#graphql
   query ActiveSubscription {

@@ -53,6 +53,7 @@ export async function completeComplianceRequest(id: string, resolution: string) 
 export interface PurgeResult {
   sessions: number;
   costComponents: number;
+  costTemplates: number;
   variantSnapshots: number;
   costRules: number;
   syncRuns: number;
@@ -77,6 +78,7 @@ export async function purgeShopData(shop: string): Promise<PurgeResult> {
   // in a state no later webhook would come back to fix.
   const [
     costComponents,
+    costTemplates,
     variantSnapshots,
     syncRuns,
     costRules,
@@ -84,6 +86,7 @@ export async function purgeShopData(shop: string): Promise<PurgeResult> {
     sessions,
   ] = await prisma.$transaction([
     prisma.costComponent.deleteMany({ where: { shop } }),
+    prisma.costTemplate.deleteMany({ where: { shop } }),
     prisma.variantSnapshot.deleteMany({ where: { shop } }),
     prisma.syncRun.deleteMany({ where: { shop } }),
     prisma.costRule.deleteMany({ where: { shop } }),
@@ -93,6 +96,7 @@ export async function purgeShopData(shop: string): Promise<PurgeResult> {
 
   const result: PurgeResult = {
     costComponents: costComponents.count,
+    costTemplates: costTemplates.count,
     variantSnapshots: variantSnapshots.count,
     syncRuns: syncRuns.count,
     costRules: costRules.count,
@@ -103,6 +107,7 @@ export async function purgeShopData(shop: string): Promise<PurgeResult> {
 
   result.total =
     result.costComponents +
+    result.costTemplates +
     result.variantSnapshots +
     result.syncRuns +
     result.costRules +

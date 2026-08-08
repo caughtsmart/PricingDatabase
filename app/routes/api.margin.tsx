@@ -37,6 +37,12 @@ import {
   type DisclosureView,
 } from "../lib/disclosure";
 import { buildWaterfall, type Waterfall } from "../lib/waterfall";
+import {
+  listTemplates,
+  sanitiseTemplateName,
+  saveTemplate,
+  type CostTemplatePayload,
+} from "../lib/templates.server";
 import { getShopConfig } from "../lib/settings.server";
 import { authenticate } from "../shopify.server";
 
@@ -95,6 +101,8 @@ export interface MarginApiPayload {
   };
   variants: VariantMarginPayload[];
   appliedRuleNames: string[];
+  /** The shop's named cost templates; applying one copies its blocks. */
+  templates: CostTemplatePayload[];
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -113,9 +121,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return cors(jsonResponse({ error: "productId is required" }, 400));
   }
 
-  const [product, config] = await Promise.all([
+  const [product, config, templates] = await Promise.all([
     fetchProductMarginData(admin.graphql as GraphQLClient, productId),
     getShopConfig(session.shop),
+    listTemplates(session.shop),
   ]);
 
   if (!product) {
@@ -155,6 +164,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     appliedRuleNames: config.rules
       .filter((rule) => rule.enabled)
       .map((rule) => rule.name),
+    templates,
     variants: product.variants.map((variant) => {
       const numericId = toNumericId(variant.id);
       const components = componentsMap.get(numericId) ?? [];
@@ -218,9 +228,12 @@ interface SavePayload {
    * "save" persists costs (the default, and the pre-intent behaviour);
    * "solve" quotes the price for a target margin from the draft costs as
    * typed, persisting nothing — what-if must be free to play with;
-   * "apply-price" writes a confirmed solved price back to the variant.
+   * "apply-price" writes a confirmed solved price back to the variant;
+   * "save-template" stores the submitted blocks as a named template.
    */
-  intent?: "save" | "solve" | "apply-price";
+  intent?: "save" | "solve" | "apply-price" | "save-template";
+  /** For "save-template": the template's name; overwrites an existing one. */
+  templateName?: string;
   variantId?: string;
   productId?: string;
   inventoryItemId?: string | null;
@@ -263,6 +276,25 @@ export async function action({ request }: ActionFunctionArgs) {
   const components = sanitiseComponents(body.components);
 
   const intent = body.intent ?? "save";
+
+  if (intent === "save-template") {
+    const name = sanitiseTemplateName(body.templateName);
+    if (!name) {
+      return cors(jsonResponse({ error: "Give the template a name." }, 400));
+    }
+    if (components.length === 0) {
+      return cors(
+        jsonResponse({ error: "A template needs at least one cost block." }, 400),
+      );
+    }
+
+    await saveTemplate(session.shop, name, components);
+    // The refreshed library goes straight back so the widget can offer the
+    // new template without another round trip.
+    return cors(
+      jsonResponse({ ok: true, templates: await listTemplates(session.shop) }),
+    );
+  }
 
   if (intent === "solve") {
     const target = Number(body.targetMarginPct);

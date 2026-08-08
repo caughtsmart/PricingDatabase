@@ -11,7 +11,7 @@ import type { loader as appLoader } from "./app";
 
 import { formatSyncHour } from "../lib/autosync";
 import { clampLevel, LEVEL_OPTIONS } from "../lib/disclosure";
-import { formatPercent, parseNumber } from "../lib/format";
+import { formatMoney, formatPercent, parseNumber } from "../lib/format";
 import { markOnboarded } from "../lib/onboarding.server";
 import type { CostRuleKind } from "../lib/margin";
 import {
@@ -20,11 +20,20 @@ import {
   updateShopSettings,
   upsertCostRule,
 } from "../lib/settings.server";
+import {
+  deleteTemplate,
+  listTemplates,
+  renameTemplate,
+  sanitiseTemplateName,
+} from "../lib/templates.server";
 import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
-  const config = await getShopConfig(session.shop);
+  const [config, templates] = await Promise.all([
+    getShopConfig(session.shop),
+    listTemplates(session.shop),
+  ]);
 
   // Subscription state comes from the parent `app` route's loader — no need to
   // ask Shopify twice on one page load.
@@ -35,6 +44,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     autoSyncEnabled: config.autoSyncEnabled,
     avgUnitsPerOrder: config.avgUnitsPerOrder,
     disclosureLevel: config.disclosureLevel,
+    templates,
     syncHour: formatSyncHour(session.shop),
     detectedCountryCode: config.detectedCountryCode,
     needsRateConfirmation: config.needsRateConfirmation,
@@ -196,6 +206,26 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: true, message: "Rule deleted." };
   }
 
+  if (intent === "template-rename") {
+    const name = sanitiseTemplateName(formData.get("name"));
+    if (!name) return { ok: false, message: "Give the template a name." };
+    const renamed = await renameTemplate(
+      session.shop,
+      String(formData.get("id")),
+      name,
+    );
+    return renamed
+      ? { ok: true, message: "Template renamed." }
+      : { ok: false, message: "You already have a template with that name." };
+  }
+
+  if (intent === "template-delete") {
+    await deleteTemplate(session.shop, String(formData.get("id")));
+    // Products that used the template keep their blocks: applying copies,
+    // so deleting the source never re-prices anything.
+    return { ok: true, message: "Template deleted." };
+  }
+
   return { ok: false, message: "Unknown action." };
 }
 
@@ -207,6 +237,7 @@ export default function Settings() {
     autoSyncEnabled,
     avgUnitsPerOrder,
     disclosureLevel,
+    templates,
     syncHour,
     detectedCountryCode,
     needsRateConfirmation,
@@ -467,6 +498,65 @@ export default function Settings() {
             </s-stack>
           </Form>
         </s-box>
+      </s-section>
+
+      <s-section heading="Cost templates">
+        <s-paragraph>
+          A template is a set of cost blocks you use again and again —
+          &ldquo;Imported from EU&rdquo;, say — typed once and applied to any
+          product. Create one from a product page: set up the blocks, then
+          &ldquo;Save these blocks as a template&rdquo;. Applying a template
+          copies its blocks, so editing or deleting a template never changes
+          products that already used it.
+        </s-paragraph>
+
+        {templates.length === 0 ? (
+          <s-text color="subdued">
+            No templates yet. Build your first on any product page.
+          </s-text>
+        ) : (
+          templates.map((template) => (
+            <s-box
+              key={template.id}
+              padding="base"
+              borderWidth="base"
+              borderRadius="base"
+            >
+              <s-stack direction="block" gap="small-400">
+                <Form method="post">
+                  <input type="hidden" name="intent" value="template-rename" />
+                  <input type="hidden" name="id" value={template.id} />
+                  <s-stack direction="inline" gap="base" alignItems="end">
+                    <s-text-field
+                      name="name"
+                      label="Name"
+                      defaultValue={template.name}
+                    />
+                    <s-button type="submit" disabled={busy}>
+                      Rename
+                    </s-button>
+                  </s-stack>
+                </Form>
+                <s-text color="subdued">
+                  {template.blocks
+                    .map((block) =>
+                      block.kind === "PERCENT_OF_COST"
+                        ? `${block.label} ${formatPercent(block.value)}`
+                        : `${block.label} ${formatMoney(block.value, currencyCode)}`,
+                    )
+                    .join(" · ")}
+                </s-text>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="template-delete" />
+                  <input type="hidden" name="id" value={template.id} />
+                  <s-button variant="tertiary" tone="critical" type="submit">
+                    Delete
+                  </s-button>
+                </Form>
+              </s-stack>
+            </s-box>
+          ))
+        )}
       </s-section>
 
       <s-section heading="How margin is worked out">

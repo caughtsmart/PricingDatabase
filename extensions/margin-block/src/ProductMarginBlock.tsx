@@ -194,6 +194,8 @@ interface MarginApiPayload {
   };
   variants: VariantPayload[];
   appliedRuleNames: string[];
+  /** The shop's named cost templates; applying one copies its blocks. */
+  templates: Array<{ id: string; name: string; blocks: CostComponentInput[] }>;
 }
 
 /**
@@ -334,6 +336,10 @@ function ProductMarginBlock() {
   // "Show everything" — a temporary lift to the full view. Deliberately not
   // persisted: the level is a shop setting; a peek is a glance.
   const [peek, setPeek] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateSaved, setTemplateSaved] = useState(false);
 
   const load = useCallback(async () => {
     if (!productId) {
@@ -432,6 +438,83 @@ function ProductMarginBlock() {
     setDirty(true);
     setSaved(false);
   }, []);
+
+  // Applying a template stamps copies of its blocks into the draft — fresh
+  // ids (with parent links remapped so groups survive), product scope by
+  // default since a template describes the product, not one size of it.
+  // Nothing persists until the merchant saves; applying is free to undo.
+  const applyTemplate = useCallback(() => {
+    const template =
+      payload?.templates.find((entry) => entry.id === selectedTemplateId) ??
+      payload?.templates[0];
+    if (!template) return;
+
+    const idMap = new Map<string, string>();
+    for (const block of template.blocks) {
+      newBlockSeq.current += 1;
+      idMap.set(block.id, `new-${newBlockSeq.current}`);
+    }
+    setDraftBlocks((current) => [
+      ...current,
+      ...template.blocks.map((block) => ({
+        id: idMap.get(block.id)!,
+        parentId: block.parentId ? (idMap.get(block.parentId) ?? null) : null,
+        label: block.label,
+        kind: block.kind,
+        value: String(block.value),
+        base: block.base ?? "LANDED_COST",
+        scope: "PRODUCT" as const,
+        confidence: block.confidence ?? "ESTIMATED",
+        enabled: block.enabled !== false,
+      })),
+    ]);
+    setDirty(true);
+    setSaved(false);
+  }, [payload, selectedTemplateId]);
+
+  const saveAsTemplate = useCallback(async () => {
+    if (!selected || !payload) return;
+    setSavingTemplate(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/margin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent: "save-template",
+          variantId: selected.variantId,
+          productId: payload.productId,
+          templateName,
+          components: draftComponents,
+        }),
+      });
+      const data = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        templates?: MarginApiPayload["templates"];
+      };
+      if (!response.ok || data.error) {
+        throw new Error(data.error ?? "Could not save the template.");
+      }
+      if (data.templates) {
+        // Fold the refreshed library into local state so the new template is
+        // immediately applicable elsewhere without a reload.
+        setPayload((current) =>
+          current ? { ...current, templates: data.templates! } : current,
+        );
+      }
+      setTemplateSaved(true);
+      setTemplateName("");
+    } catch (templateError) {
+      setError(
+        templateError instanceof Error
+          ? templateError.message
+          : "Could not save the template.",
+      );
+    } finally {
+      setSavingTemplate(false);
+    }
+  }, [selected, payload, templateName, draftComponents]);
 
   // The level-1 nudge: one tap drops in the commonly forgotten blocks,
   // labelled but at zero — real figures come from the merchant, not from a
@@ -921,6 +1004,52 @@ function ProductMarginBlock() {
             <s-button variant="secondary" onClick={() => addBlock("PERCENT_OF_COST")}>
               Add a percentage
             </s-button>
+          </s-stack>
+        ) : null}
+
+        {/* The template library: costs typed once, applied anywhere. Applying
+            copies — the blocks become this product's own to edit. */}
+        {view.blocks && payload.templates.length > 0 ? (
+          <s-stack direction="inline" gap="small-300" alignItems="end">
+            <s-select
+              label="Cost templates"
+              value={selectedTemplateId || payload.templates[0].id}
+              onInput={(event: Event) =>
+                setSelectedTemplateId((event.target as HTMLSelectElement).value)
+              }
+            >
+              {payload.templates.map((template) => (
+                <s-option key={template.id} value={template.id}>
+                  {template.name} ({template.blocks.length}{" "}
+                  {template.blocks.length === 1 ? "block" : "blocks"})
+                </s-option>
+              ))}
+            </s-select>
+            <s-button variant="secondary" onClick={() => applyTemplate()}>
+              Add its blocks
+            </s-button>
+          </s-stack>
+        ) : null}
+
+        {view.blocks && draftBlocks.length > 0 ? (
+          <s-stack direction="inline" gap="small-300" alignItems="end">
+            <s-text-field
+              label="Save these blocks as a template"
+              placeholder="e.g. Imported from EU"
+              value={templateName}
+              onInput={(event: Event) => {
+                setTemplateName((event.target as HTMLInputElement).value);
+                setTemplateSaved(false);
+              }}
+            />
+            <s-button
+              variant="secondary"
+              disabled={savingTemplate || !templateName.trim()}
+              onClick={() => void saveAsTemplate()}
+            >
+              {savingTemplate ? "Saving…" : "Save template"}
+            </s-button>
+            {templateSaved ? <s-text tone="success">Template saved</s-text> : null}
           </s-stack>
         ) : null}
 

@@ -13,11 +13,13 @@ import prisma from "../db.server";
 import {
   fetchProductMarginData,
   updateUnitCost,
+  updateVariantPrice,
   type GraphQLClient,
 } from "../lib/catalog.server";
 import {
   calculateMargin,
   daysHeldEstimate,
+  quoteForTargetMargin,
   type MarginResult,
 } from "../lib/margin";
 import { buildWaterfall, type Waterfall } from "../lib/waterfall";
@@ -146,6 +148,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 interface SavePayload {
+  /**
+   * "save" persists costs (the default, and the pre-intent behaviour);
+   * "solve" quotes the price for a target margin from the draft costs as
+   * typed, persisting nothing — what-if must be free to play with;
+   * "apply-price" writes a confirmed solved price back to the variant.
+   */
+  intent?: "save" | "solve" | "apply-price";
   variantId?: string;
   productId?: string;
   inventoryItemId?: string | null;
@@ -154,6 +163,8 @@ interface SavePayload {
   price?: number;
   compareAtPrice?: number | null;
   extras?: Partial<VariantExtras>;
+  /** For "solve": the net margin to hit, in percentage points. */
+  targetMarginPct?: number;
 }
 
 function sanitiseAmount(value: unknown): number {
@@ -190,6 +201,89 @@ export async function action({ request }: ActionFunctionArgs) {
     other: sanitiseAmount(body.extras?.other),
     notes: body.extras?.notes ? String(body.extras.notes).slice(0, 500) : null,
   };
+
+  const intent = body.intent ?? "save";
+
+  if (intent === "solve") {
+    const target = Number(body.targetMarginPct);
+    if (!Number.isFinite(target) || target >= 100) {
+      return cors(
+        jsonResponse({ error: "targetMarginPct must be a number below 100" }, 400),
+      );
+    }
+
+    const [config, snapshot] = await Promise.all([
+      getShopConfig(session.shop),
+      prisma.variantSnapshot.findUnique({
+        where: {
+          shop_variantId: {
+            shop: session.shop,
+            variantId: toNumericId(body.variantId),
+          },
+        },
+        select: { inventoryQuantity: true, unitsSold: true },
+      }),
+    ]);
+
+    const quote = quoteForTargetMargin(
+      // The draft costs exactly as typed — solving persists nothing, so the
+      // merchant can play what-if without committing anything.
+      toCostInputs(
+        typeof body.unitCost === "number" && Number.isFinite(body.unitCost)
+          ? body.unitCost
+          : null,
+        extras,
+      ),
+      config.rules,
+      config.settings,
+      target,
+      {
+        unitsPerOrder: config.avgUnitsPerOrder,
+        daysHeld: snapshot
+          ? daysHeldEstimate(snapshot.inventoryQuantity, snapshot.unitsSold)
+          : 0,
+      },
+    );
+
+    if (!quote) {
+      const revenuePct = config.rules
+        .filter((rule) => rule.enabled && rule.kind === "PERCENT_OF_REVENUE")
+        .reduce((total, rule) => total + rule.value, 0);
+      return cors(
+        jsonResponse({
+          solvable: false,
+          reason: `No price can reach ${target}%: your percentage-of-revenue costs already take ${revenuePct}% of every sale, and together they add up to the whole price or more.`,
+        }),
+      );
+    }
+
+    return cors(
+      jsonResponse({
+        solvable: true,
+        price: quote.price,
+        margin: quote.result,
+        waterfall: buildWaterfall(quote.result),
+      }),
+    );
+  }
+
+  if (intent === "apply-price") {
+    const price = Number(body.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      return cors(
+        jsonResponse({ error: "A positive price is required" }, 400),
+      );
+    }
+
+    const userErrors = await updateVariantPrice(
+      admin.graphql as GraphQLClient,
+      body.productId,
+      body.variantId,
+      price,
+    );
+
+    return cors(jsonResponse({ ok: userErrors.length === 0, userErrors }));
+  }
 
   await saveVariantExtras(
     session.shop,

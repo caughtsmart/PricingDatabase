@@ -30,6 +30,8 @@ close that gap.
   profit last — tap a segment to inspect it
 - A full walk from price → tax → landed cost → fees → net profit
 - Break-even price, and the price needed to hit your target margin
+- Lock-and-solve: hold the costs still, name a margin, and the price solves
+  itself — one confirmed tap then sets it on the variant
 - Editable cost fields: unit cost (written back to Shopify's own "Cost per
   item"), plus freight, duty, packaging, handling and other
 

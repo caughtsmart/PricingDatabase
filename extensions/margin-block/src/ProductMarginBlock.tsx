@@ -481,8 +481,224 @@ function ProductMarginBlock() {
           </s-button>
           {saved ? <s-text tone="success">Saved</s-text> : null}
         </s-stack>
+
+        <SolvePanel
+          key={selected.variantId}
+          variantId={selected.variantId}
+          productId={payload.productId}
+          currentPrice={selected.price}
+          unitCost={toAmount(draftUnitCost)}
+          extras={{
+            freight: toAmount(draftExtras.freight),
+            duty: toAmount(draftExtras.duty),
+            packaging: toAmount(draftExtras.packaging),
+            handling: toAmount(draftExtras.handling),
+            other: toAmount(draftExtras.other),
+          }}
+          defaultTargetPct={payload.targetMarginPct}
+          fmt={fmt}
+          onPriceApplied={() => void load()}
+        />
       </s-stack>
     </s-admin-block>
+  );
+}
+
+interface SolveResponse {
+  solvable?: boolean;
+  price?: number;
+  margin?: MarginResult;
+  reason?: string;
+  error?: string;
+}
+
+/**
+ * Lock-and-solve (DESIGN.md §6): the costs hold still, the merchant names a
+ * margin, and the price solves itself — on the server, since the widget never
+ * computes. Solving uses the draft costs exactly as typed, so what-if play is
+ * free; nothing persists until the merchant explicitly sets the price.
+ */
+function SolvePanel({
+  variantId,
+  productId,
+  currentPrice,
+  unitCost,
+  extras,
+  defaultTargetPct,
+  fmt,
+  onPriceApplied,
+}: {
+  variantId: string;
+  productId: string;
+  currentPrice: number;
+  unitCost: number;
+  extras: Record<ExtraKey, number>;
+  defaultTargetPct: number;
+  fmt: (value: number) => string;
+  onPriceApplied: () => void;
+}) {
+  const [targetPct, setTargetPct] = useState(String(defaultTargetPct));
+  const [quote, setQuote] = useState<{ price: number; margin: MarginResult } | null>(null);
+  const [solveError, setSolveError] = useState<string | null>(null);
+  const [solving, setSolving] = useState(false);
+  // Two-step apply: first tap arms, second confirms. Changing the price of a
+  // live product deserves a deliberate second tap, not a slip of the thumb.
+  const [armedPrice, setArmedPrice] = useState<number | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+
+  const hasCost = unitCost > 0;
+
+  // Re-solve, debounced, whenever the target or the draft costs move. Each
+  // solve is a server round trip; the debounce keeps typing from becoming a
+  // request per keystroke.
+  useEffect(() => {
+    setArmedPrice(null);
+    setApplied(false);
+
+    if (!hasCost) {
+      setQuote(null);
+      setSolveError(null);
+      return;
+    }
+    const target = Number(targetPct);
+    if (!Number.isFinite(target) || target >= 100) {
+      setQuote(null);
+      setSolveError(target >= 100 ? "A margin of 100% would mean the product cost nothing at all." : null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setSolving(true);
+      setSolveError(null);
+      fetch("/api/margin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent: "solve",
+          variantId,
+          productId,
+          unitCost,
+          extras,
+          targetMarginPct: target,
+        }),
+      })
+        .then((response) => response.json() as Promise<SolveResponse>)
+        .then((data) => {
+          if (data.solvable && typeof data.price === "number" && data.margin) {
+            setQuote({ price: data.price, margin: data.margin });
+          } else {
+            setQuote(null);
+            setSolveError(data.reason ?? data.error ?? "Could not solve a price.");
+          }
+        })
+        .catch(() => {
+          setQuote(null);
+          setSolveError("Could not reach the app to solve a price.");
+        })
+        .finally(() => setSolving(false));
+    }, 450);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetPct, unitCost, extras.freight, extras.duty, extras.packaging, extras.handling, extras.other]);
+
+  async function applyPrice(price: number) {
+    setApplying(true);
+    try {
+      const response = await fetch("/api/margin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "apply-price", variantId, productId, price }),
+      });
+      const data = (await response.json()) as { ok?: boolean; userErrors?: string[]; error?: string };
+      if (!response.ok || data.error || data.userErrors?.length) {
+        setSolveError(data.userErrors?.join(" ") ?? data.error ?? "Could not set the price.");
+        return;
+      }
+      setApplied(true);
+      setArmedPrice(null);
+      onPriceApplied();
+    } catch {
+      setSolveError("Could not reach the app to set the price.");
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const delta = quote ? quote.price - currentPrice : 0;
+
+  return (
+    <s-stack direction="block" gap="small-400">
+      <s-heading>What should this sell for?</s-heading>
+
+      {!hasCost ? (
+        <s-text color="subdued">
+          Enter a unit cost above first — a price solved from no cost would be
+          fiction.
+        </s-text>
+      ) : (
+        <>
+          <s-number-field
+            label="Margin you want"
+            suffix="%"
+            min={-50}
+            max={99}
+            step={0.5}
+            value={targetPct}
+            onInput={(event: Event) =>
+              setTargetPct((event.target as HTMLInputElement).value)
+            }
+          />
+
+          {solveError ? (
+            <s-text tone="critical">{solveError}</s-text>
+          ) : quote ? (
+            <s-stack direction="block" gap="small-500">
+              <s-text type="strong" fontVariantNumeric="tabular-nums">
+                Charge {fmt(quote.price)} → {fmt(quote.margin.netProfit)} profit
+                a unit
+              </s-text>
+              <s-text color="subdued">
+                {Math.abs(delta) < 0.005
+                  ? "That is today's price."
+                  : delta > 0
+                    ? `${fmt(delta)} above today's ${fmt(currentPrice)}.`
+                    : `${fmt(-delta)} below today's ${fmt(currentPrice)} — room to cut.`}
+              </s-text>
+              <s-stack direction="inline" gap="base" alignItems="center">
+                {armedPrice === quote.price ? (
+                  <s-button
+                    variant="primary"
+                    tone="critical"
+                    disabled={applying}
+                    onClick={() => void applyPrice(quote.price)}
+                  >
+                    {applying ? "Setting…" : `Confirm ${fmt(quote.price)}`}
+                  </s-button>
+                ) : (
+                  <s-button
+                    variant="secondary"
+                    disabled={applying || Math.abs(delta) < 0.005}
+                    onClick={() => setArmedPrice(quote.price)}
+                  >
+                    Set price to {fmt(quote.price)}
+                  </s-button>
+                )}
+                {armedPrice === quote.price ? (
+                  <s-button variant="tertiary" onClick={() => setArmedPrice(null)}>
+                    Cancel
+                  </s-button>
+                ) : null}
+                {applied ? <s-text tone="success">Price updated</s-text> : null}
+              </s-stack>
+            </s-stack>
+          ) : solving ? (
+            <s-text color="subdued">Working it out…</s-text>
+          ) : null}
+        </>
+      )}
+    </s-stack>
   );
 }
 

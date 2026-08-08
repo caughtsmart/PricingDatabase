@@ -359,6 +359,46 @@ export function solvePriceForMargin(
   return roundMoney(toGrossPrice(netRevenue, settings));
 }
 
+export interface MarginQuote {
+  /** The customer-facing price that hits the asked-for margin. */
+  price: number;
+  /** The full breakdown at that price, for display without a second call. */
+  result: MarginResult;
+}
+
+/**
+ * Lock-and-solve (docs/DESIGN.md §6): hold the costs still, name a margin,
+ * and the price solves itself.
+ *
+ * A thin composition over `solvePriceForMargin` and `calculateMargin` so the
+ * "solve then show the consequences" round trip is one tested unit rather
+ * than logic assembled ad hoc in a route handler. Returns null when no finite
+ * price reaches the margin — percentage-of-revenue costs plus the target
+ * consuming 100% or more of every sale.
+ */
+export function quoteForTargetMargin(
+  costs: VariantCostInputs,
+  rules: CostRule[],
+  settings: MarginSettings,
+  targetMarginPct: number,
+  context: MarginContext = {},
+): MarginQuote | null {
+  const landedUnitCost = num(costs.unitCost) + sumExtraUnitCost(costs);
+  const price = solvePriceForMargin(
+    landedUnitCost,
+    rules,
+    settings,
+    targetMarginPct,
+    context,
+  );
+  if (price === null) return null;
+
+  return {
+    price,
+    result: calculateMargin({ price, costs, rules, settings, context }),
+  };
+}
+
 function classify(
   result: Pick<MarginResult, "netProfit" | "netMarginPct">,
   hasCostData: boolean,

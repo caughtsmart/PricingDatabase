@@ -48,6 +48,18 @@ export const PRODUCT_MARGIN_QUERY = `#graphql
   }
 `;
 
+export const SET_VARIANT_PRICE_MUTATION = `#graphql
+  mutation SetVariantPrice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants {
+        id
+        price
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
 export const UPDATE_UNIT_COST_MUTATION = `#graphql
   mutation UpdateUnitCost($id: ID!, $cost: Decimal!) {
     inventoryItemUpdate(id: $id, input: { cost: $cost }) {
@@ -145,6 +157,39 @@ export async function fetchProductMarginData(
       inventoryItemId: variant.inventoryItem?.id ?? null,
     })),
   };
+}
+
+/**
+ * Sets a variant's selling price. Returns any user errors.
+ *
+ * The write half of lock-and-solve: the solver quotes a price, the merchant
+ * confirms, and this makes it real. Price is sent as a 2dp string because the
+ * Admin API's Money scalar is a decimal string, not a float.
+ */
+export async function updateVariantPrice(
+  graphql: GraphQLClient,
+  productId: string,
+  variantId: string,
+  price: number,
+): Promise<string[]> {
+  const response = await graphql(SET_VARIANT_PRICE_MUTATION, {
+    variables: {
+      productId,
+      variants: [{ id: variantId, price: price.toFixed(2) }],
+    },
+  });
+  const body = (await response.json()) as {
+    data?: {
+      productVariantsBulkUpdate: {
+        userErrors: Array<{ field: string[] | null; message: string }>;
+      } | null;
+    };
+  };
+  return (
+    body.data?.productVariantsBulkUpdate?.userErrors.map(
+      (error) => error.message,
+    ) ?? []
+  );
 }
 
 /** Writes Shopify's own "Cost per item" field. Returns any user errors. */

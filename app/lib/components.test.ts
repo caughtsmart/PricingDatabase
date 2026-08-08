@@ -104,6 +104,52 @@ describe("resolveComponents", () => {
     expect(resolved.cyclic).toEqual(["lost"]);
   });
 
+  it("routes percent blocks to their declared base", () => {
+    const resolved = resolveComponents([
+      block({ id: "duty", kind: "PERCENT_OF_COST", value: 4.5 }),
+      block({
+        id: "royalty",
+        kind: "PERCENT_OF_COST",
+        base: "NET_REVENUE",
+        value: 8,
+      }),
+      block({
+        id: "listing",
+        kind: "PERCENT_OF_COST",
+        base: "GROSS_PRICE",
+        value: 2,
+      }),
+    ]);
+
+    expect(resolved.extraCostPct).toBe(4.5);
+    expect(resolved.extraRevenuePct).toBe(8);
+    expect(resolved.extraGrossPct).toBe(2);
+  });
+
+  it("an absent base means the goods cost, as it always has", () => {
+    const resolved = resolveComponents([
+      block({ id: "duty", kind: "PERCENT_OF_COST", value: 4.5 }),
+    ]);
+
+    expect(resolved.extraCostPct).toBe(4.5);
+    expect(resolved.extraRevenuePct).toBe(0);
+    expect(resolved.extraGrossPct).toBe(0);
+  });
+
+  it("a muted revenue-based block contributes nothing", () => {
+    const resolved = resolveComponents([
+      block({
+        id: "royalty",
+        kind: "PERCENT_OF_COST",
+        base: "NET_REVENUE",
+        value: 8,
+        enabled: false,
+      }),
+    ]);
+
+    expect(resolved.extraRevenuePct).toBe(0);
+  });
+
   it("treats junk values as zero", () => {
     const resolved = resolveComponents([
       block({ id: "junk", value: Number.NaN }),

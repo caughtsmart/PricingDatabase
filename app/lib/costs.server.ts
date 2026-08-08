@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 
 import prisma from "../db.server";
 import {
+  type ComponentBase,
   type ComponentConfidence,
   type ComponentKind,
   type CostComponentInput,
@@ -29,6 +30,7 @@ const VARIANT_KINDS: ComponentKind[] = [
   "GROUP",
 ];
 const CONFIDENCES: ComponentConfidence[] = ["KNOWN", "ESTIMATED", "GUESSED"];
+const BASES: ComponentBase[] = ["LANDED_COST", "NET_REVENUE", "GROSS_PRICE"];
 
 /** Hard cap per variant: a cost model with more blocks than this is a bug. */
 const MAX_COMPONENTS = 50;
@@ -73,6 +75,13 @@ export function sanitiseComponents(raw: unknown): CostComponentInput[] {
         kind === "PERCENT_OF_COST"
           ? Math.max(-1000, Math.min(1000, value))
           : Math.max(0, value),
+      // Only a percent has a denominator; anything else stores the default
+      // so a later kind change starts from goods cost, not stale junk.
+      base:
+        kind === "PERCENT_OF_COST" &&
+        BASES.includes(candidate.base as ComponentBase)
+          ? (candidate.base as ComponentBase)
+          : "LANDED_COST",
       confidence,
       enabled: candidate.enabled !== false,
       sortOrder: out.length,
@@ -86,6 +95,7 @@ function rowToInput(row: {
   parentId: string | null;
   label: string;
   kind: string;
+  base: string;
   value: unknown;
   confidence: string;
   enabled: boolean;
@@ -101,6 +111,9 @@ function rowToInput(row: {
     kind: VARIANT_KINDS.includes(row.kind as ComponentKind)
       ? (row.kind as ComponentKind)
       : "FIXED_PER_UNIT",
+    base: BASES.includes(row.base as ComponentBase)
+      ? (row.base as ComponentBase)
+      : "LANDED_COST",
     value: VARIANT_KINDS.includes(row.kind as ComponentKind)
       ? toNumber(row.value as never)
       : 0,
@@ -181,6 +194,7 @@ export async function saveComponents(
           : null,
         label: component.label,
         kind: component.kind,
+        base: component.base ?? "LANDED_COST",
         value: component.value,
         confidence: component.confidence ?? "ESTIMATED",
         enabled: component.enabled !== false,

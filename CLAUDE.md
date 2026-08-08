@@ -139,8 +139,10 @@ the widget renders — levels hide working, never money, and the monotonicity
 test enforces "moving up never hides". §2.5 confidence is in too:
 `app/lib/confidence.ts` (pure) turns each block's KNOWN/ESTIMATED/GUESSED tag
 into the headline's "likely X–Y%" band and the ranked "tighten this up" list.
-Still open, per the doc: per-component `base` overrides and product/template
-scope.
+Per-component `base` overrides are live: a percent block declares whether it
+is measured against the goods cost, net revenue or the gross price, and the
+price-linked ones ride the solver's `r` term. Still open, per the doc:
+product/template scope.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding
 any UI.

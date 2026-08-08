@@ -21,6 +21,8 @@ export default async () => {
 // tsconfig; the API payload is the contract between the two.
 type ComponentKind = "FIXED_PER_UNIT" | "PERCENT_OF_COST" | "GROUP";
 type ComponentConfidence = "KNOWN" | "ESTIMATED" | "GUESSED";
+/** What a percent block is measured against. Fixed amounts have no base. */
+type ComponentBase = "LANDED_COST" | "NET_REVENUE" | "GROSS_PRICE";
 
 interface CostComponentInput {
   id: string;
@@ -29,10 +31,21 @@ interface CostComponentInput {
   kind: ComponentKind;
   /** Currency for FIXED_PER_UNIT and collapsed GROUPs; % points for PERCENT_OF_COST. */
   value: number;
+  base?: ComponentBase;
   confidence?: ComponentConfidence;
   enabled?: boolean;
   sortOrder?: number;
 }
+
+/**
+ * The base said out loud (MARGIN-MODEL.md §2.3): "3%" is very different
+ * money against the goods cost, the revenue you keep, or the full price.
+ */
+const BASE_OPTIONS: Array<{ value: ComponentBase; label: string }> = [
+  { value: "LANDED_COST", label: "The goods cost" },
+  { value: "NET_REVENUE", label: "Revenue you keep (after tax)" },
+  { value: "GROSS_PRICE", label: "The full selling price" },
+];
 
 type CostRuleKind =
   | "PERCENT_OF_REVENUE"
@@ -77,6 +90,8 @@ interface MarginResult {
   unitCost: number;
   extraUnitCost: number;
   landedUnitCost: number;
+  /** Blocks measured against the price (revenue/gross bases), not the goods. */
+  extraPriceLinkedCost: number;
   appliedCosts: AppliedCost[];
   totalVariableCost: number;
   totalCost: number;
@@ -184,6 +199,7 @@ interface DraftBlock {
   label: string;
   kind: ComponentKind;
   value: string;
+  base: ComponentBase;
   confidence: ComponentConfidence;
   enabled: boolean;
 }
@@ -195,6 +211,7 @@ function toDrafts(components: CostComponentInput[]): DraftBlock[] {
     label: component.label,
     kind: component.kind,
     value: String(component.value),
+    base: component.base ?? "LANDED_COST",
     confidence: component.confidence ?? "ESTIMATED",
     enabled: component.enabled !== false,
   }));
@@ -214,6 +231,7 @@ function draftsToComponents(drafts: DraftBlock[]): CostComponentInput[] {
     label: draft.label.trim() || "Cost",
     kind: draft.kind,
     value: blockAmount(draft.value, draft.kind),
+    base: draft.base,
     confidence: draft.confidence,
     enabled: draft.enabled,
     sortOrder: index,
@@ -386,6 +404,7 @@ function ProductMarginBlock() {
         label: "",
         kind,
         value: "0",
+        base: "LANDED_COST",
         confidence: "ESTIMATED",
         enabled: true,
       },
@@ -417,6 +436,7 @@ function ProductMarginBlock() {
           label: nudge.label,
           kind: nudge.kind,
           value: "0",
+          base: "LANDED_COST" as const,
           confidence: "GUESSED" as const,
           enabled: true,
         };
@@ -643,6 +663,13 @@ function ProductMarginBlock() {
                 />
               ) : null}
               <Row label="Landed cost" value={fmt(margin.landedUnitCost)} strong />
+              {margin.extraPriceLinkedCost > 0 ? (
+                <Row
+                  label="Costs tied to the price"
+                  value={`− ${fmt(margin.extraPriceLinkedCost)}`}
+                  subdued
+                />
+              ) : null}
               {view.itemisedRules ? (
                 margin.appliedCosts.map((cost) => (
                   <Row
@@ -749,7 +776,7 @@ function ProductMarginBlock() {
                     />
                     {block.kind === "PERCENT_OF_COST" ? (
                       <s-number-field
-                        label="Rate (% of goods cost)"
+                        label="Rate"
                         suffix="%"
                         step={0.1}
                         value={block.value}
@@ -775,6 +802,27 @@ function ProductMarginBlock() {
                       />
                     )}
                   </s-grid>
+                  {/* A percentage must say what it is a percentage OF —
+                      3% of the price is very different money from 3% of
+                      the goods cost. */}
+                  {block.kind === "PERCENT_OF_COST" ? (
+                    <s-select
+                      label="Percentage of what?"
+                      value={block.base}
+                      onInput={(event: Event) =>
+                        editBlock(block.id, {
+                          base: (event.target as HTMLSelectElement)
+                            .value as ComponentBase,
+                        })
+                      }
+                    >
+                      {BASE_OPTIONS.map((option) => (
+                        <s-option key={option.value} value={option.value}>
+                          {option.label}
+                        </s-option>
+                      ))}
+                    </s-select>
+                  ) : null}
                   <s-stack
                     direction="inline"
                     gap="base"
@@ -829,7 +877,7 @@ function ProductMarginBlock() {
               Add a cost per unit
             </s-button>
             <s-button variant="secondary" onClick={() => addBlock("PERCENT_OF_COST")}>
-              Add a % of goods cost
+              Add a percentage
             </s-button>
           </s-stack>
         ) : null}

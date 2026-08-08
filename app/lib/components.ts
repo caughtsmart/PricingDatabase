@@ -18,6 +18,13 @@ export type ComponentKind = "FIXED_PER_UNIT" | "PERCENT_OF_COST" | "GROUP";
 
 export type ComponentConfidence = "KNOWN" | "ESTIMATED" | "GUESSED";
 
+/**
+ * What a percent block is measured against (MARGIN-MODEL.md §2.3: a
+ * percentage is meaningless until it declares its base). Fixed blocks and
+ * groups ignore it — a flat amount has no denominator.
+ */
+export type ComponentBase = "LANDED_COST" | "NET_REVENUE" | "GROSS_PRICE";
+
 export interface CostComponentInput {
   id: string;
   parentId?: string | null;
@@ -25,6 +32,8 @@ export interface CostComponentInput {
   kind: ComponentKind;
   /** Currency for FIXED_PER_UNIT and collapsed GROUPs; % points for PERCENT_OF_COST. */
   value: number;
+  /** Denominator for PERCENT_OF_COST blocks; defaults to the goods cost. */
+  base?: ComponentBase;
   confidence?: ComponentConfidence;
   enabled?: boolean;
   sortOrder?: number;
@@ -35,6 +44,10 @@ export interface ResolvedComponents {
   extraFixed: number;
   /** Σ percent-of-goods rates, in % points. */
   extraCostPct: number;
+  /** Σ percent-of-net-revenue rates, in % points. */
+  extraRevenuePct: number;
+  /** Σ percent-of-gross-price rates, in % points. */
+  extraGrossPct: number;
   /** Ids that were skipped because they sit in a parentId cycle. */
   cyclic: string[];
 }
@@ -84,6 +97,8 @@ export function resolveComponents(
 
   let extraFixed = 0;
   let extraCostPct = 0;
+  let extraRevenuePct = 0;
+  let extraGrossPct = 0;
 
   for (const component of components) {
     if (component.enabled === false) continue;
@@ -109,12 +124,23 @@ export function resolveComponents(
         extraFixed += num(component.value);
         break;
       case "PERCENT_OF_COST":
-        extraCostPct += num(component.value);
+        // The base override (§2.3): the same 3% is very different money
+        // against the goods cost, the kept revenue, or the full price.
+        switch (component.base ?? "LANDED_COST") {
+          case "NET_REVENUE":
+            extraRevenuePct += num(component.value);
+            break;
+          case "GROSS_PRICE":
+            extraGrossPct += num(component.value);
+            break;
+          default:
+            extraCostPct += num(component.value);
+        }
         break;
     }
   }
 
-  return { extraFixed, extraCostPct, cyclic };
+  return { extraFixed, extraCostPct, extraRevenuePct, extraGrossPct, cyclic };
 }
 
 /** Resolves blocks straight into the engine's cost-input shape. */
@@ -127,5 +153,7 @@ export function componentsToCostInputs(
     unitCost,
     extraFixed: resolved.extraFixed,
     extraCostPct: resolved.extraCostPct,
+    extraRevenuePct: resolved.extraRevenuePct,
+    extraGrossPct: resolved.extraGrossPct,
   };
 }

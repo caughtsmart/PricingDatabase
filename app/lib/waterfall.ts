@@ -102,6 +102,17 @@ export function buildWaterfall(result: MarginResult): Waterfall {
     });
   }
 
+  if (result.extraPriceLinkedCost > 0) {
+    segments.push({
+      key: "price-linked",
+      label: "Costs tied to the price",
+      amount: result.extraPriceLinkedCost,
+      share: shareOf(result.extraPriceLinkedCost),
+      kind: "cost",
+      tone: "neutral",
+    });
+  }
+
   for (const cost of result.appliedCosts) {
     if (cost.amount === 0) continue;
     segments.push({

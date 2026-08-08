@@ -33,8 +33,9 @@ close that gap.
 - Lock-and-solve: hold the costs still, name a margin, and the price solves
   itself — one confirmed tap then sets it on the variant
 - Editable costs: unit cost (written back to Shopify's own "Cost per item"),
-  plus cost blocks you name yourself — a flat amount per unit or a percentage
-  of the goods cost — each with a mute toggle instead of a delete button
+  plus cost blocks you name yourself — a flat amount per unit, or a
+  percentage of the goods cost, the revenue you keep, or the full price —
+  each with a mute toggle instead of a delete button
 - Three detail levels, chosen in settings: one honest number, the working,
   or full unit economics. A simpler level hides detail, never money — folded
   costs are announced with a tap-to-peek chip

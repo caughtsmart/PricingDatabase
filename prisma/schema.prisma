@@ -167,8 +167,10 @@ model CostComponent {
   /// Variant-level rows are constrained to FIXED_PER_UNIT, PERCENT_OF_COST
   /// and GROUP in application code; the enum is shared with CostRule.
   kind  CostRuleKind
-  /// Meaningful for percentage kinds; ignored for fixed amounts.
-  base  CostBase @default(NET_REVENUE)
+  /// What a percentage block is measured against; ignored for fixed amounts.
+  /// Defaults to the goods cost — that is what every block meant before the
+  /// base became honoured, and it is the base a duty or FX block wants.
+  base  CostBase @default(LANDED_COST)
   value Decimal  @db.Decimal(12, 4)
 
   confidence Confidence @default(ESTIMATED)

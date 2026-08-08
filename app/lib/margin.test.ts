@@ -498,7 +498,7 @@ describe("break-even and target pricing", () => {
     const rules: CostRule[] = [
       { id: "duty", name: "Duty", kind: "PERCENT_OF_COST", value: 10, enabled: true },
     ];
-    const price = solvePriceForMargin(60, rules, usSettings, 40);
+    const price = solvePriceForMargin({ unitCost: 60 }, rules, usSettings, 40);
     // netRev = 60 × 1.1 / 0.6 = 110
     expect(price).toBe(110);
   });
@@ -512,7 +512,9 @@ describe("break-even and target pricing", () => {
       enabled: true,
     };
 
-    expect(solvePriceForMargin(50, [greedy], ukSettings, 35)).toBeNull();
+    expect(
+      solvePriceForMargin({ unitCost: 50 }, [greedy], ukSettings, 35),
+    ).toBeNull();
   });
 
   it("quoteForTargetMargin returns a price whose breakdown lands on target", () => {
@@ -545,8 +547,83 @@ describe("break-even and target pricing", () => {
 
   it("re-applies VAT so the suggested price is customer-facing", () => {
     // No fees, £60 landed, 40% target -> £100 net -> £120 inc VAT.
-    const price = solvePriceForMargin(60, noRules, ukSettings, 40);
+    const price = solvePriceForMargin({ unitCost: 60 }, noRules, ukSettings, 40);
     expect(price).toBe(120);
+  });
+});
+
+describe("price-linked cost blocks (base overrides)", () => {
+  it("a revenue-based block scales with net revenue, not the goods", () => {
+    // $100 price, no tax: a 10% of-revenue royalty costs $10; landed stays $40.
+    const result = calculateMargin({
+      price: 100,
+      costs: { unitCost: 40, extraRevenuePct: 10 },
+      rules: noRules,
+      settings: usSettings,
+    });
+
+    expect(result.landedUnitCost).toBe(40);
+    expect(result.extraPriceLinkedCost).toBe(10);
+    expect(result.netProfit).toBe(50);
+    expect(result.netMarginPct).toBe(50);
+  });
+
+  it("a gross-price block is measured before tax comes out", () => {
+    // £120 inc VAT → £100 net. A 5%-of-price fee costs £6 (of the £120),
+    // not £5 — the difference is exactly why the base must be declared.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 40, extraGrossPct: 5 },
+      rules: noRules,
+      settings: ukSettings,
+    });
+
+    expect(result.extraPriceLinkedCost).toBe(6);
+    expect(result.netProfit).toBe(54);
+  });
+
+  it("round-trips: a solved price with price-linked blocks lands on target", () => {
+    const costs = {
+      unitCost: 40,
+      extraFixed: 3,
+      extraCostPct: 4.5,
+      extraRevenuePct: 8,
+      extraGrossPct: 2,
+    };
+    const rules: CostRule[] = [
+      { id: "fee", name: "Payment", kind: "PERCENT_OF_REVENUE", value: 1.75, enabled: true },
+      { id: "duty", name: "Duty", kind: "PERCENT_OF_COST", value: 4, enabled: true },
+    ];
+
+    const price = solvePriceForMargin(costs, rules, ukSettings, 30);
+    expect(price).not.toBeNull();
+
+    const result = calculateMargin({
+      price: price!,
+      costs,
+      rules,
+      settings: ukSettings,
+    });
+    expect(result.netMarginPct).toBeCloseTo(30, 1);
+
+    const breakEven = calculateMargin({
+      price: result.breakEvenPrice!,
+      costs,
+      rules,
+      settings: ukSettings,
+    });
+    expect(Math.abs(breakEven.netProfit)).toBeLessThanOrEqual(0.01);
+  });
+
+  it("returns null when price-linked blocks plus the target eat all revenue", () => {
+    expect(
+      solvePriceForMargin(
+        { unitCost: 10, extraRevenuePct: 70 },
+        noRules,
+        usSettings,
+        35,
+      ),
+    ).toBeNull();
   });
 });
 

@@ -120,6 +120,14 @@ export interface VariantCostInputs {
   extraFixed?: number | null;
   /** Σ percent-of-goods block rates (duty, FX…), in percentage points. */
   extraCostPct?: number | null;
+  /**
+   * Σ block rates measured against net revenue (a per-product royalty,
+   * a listing fee), in percentage points. Price-linked, so these live
+   * outside landed cost — a shelf cost cannot depend on the price tag.
+   */
+  extraRevenuePct?: number | null;
+  /** Σ block rates measured against the gross price, in percentage points. */
+  extraGrossPct?: number | null;
 }
 
 /** The landed unit cost implied by a set of cost inputs. */
@@ -185,10 +193,16 @@ export interface MarginResult {
   extraUnitCost: number;
   /** unitCost + extraUnitCost. What the unit costs to sit on the shelf. */
   landedUnitCost: number;
+  /**
+   * Cost blocks measured against the price rather than the goods (revenue-
+   * and gross-price-based percents). Kept out of landedUnitCost because a
+   * shelf cost cannot depend on the price tag.
+   */
+  extraPriceLinkedCost: number;
 
   appliedCosts: AppliedCost[];
   totalVariableCost: number;
-  /** landedUnitCost + totalVariableCost. */
+  /** landedUnitCost + extraPriceLinkedCost + totalVariableCost. */
   totalCost: number;
 
   /** netRevenue − landedUnitCost. Ignores shop-wide rules. */
@@ -331,37 +345,54 @@ function fixedCharges(rules: CostRule[], context: MarginContext): number {
 }
 
 /**
+ * Gross price per unit of net revenue — the factor that turns a
+ * percent-of-gross-price rate into a percent-of-net-revenue rate, so the
+ * solver can fold both into one `r`.
+ */
+function grossPerNet(settings: MarginSettings): number {
+  if (!settings.pricesIncludeTax) return 1;
+  const rate = num(settings.taxRatePct);
+  if (rate <= -100) return 1;
+  return 1 + rate / 100;
+}
+
+/**
  * Solves for the gross price that yields `desiredMarginPct` net margin.
  *
  * Starting from
  *
  *   netProfit = netRev − landed − netRev·r − landed·c − fixed
  *
- * (r = percent-of-revenue rates, c = percent-of-cost and loss rates, fixed =
- * per-unit + per-order ÷ basket + per-day × days held) and requiring
- * `netProfit = m · netRev`:
+ * (r = every price-linked rate: percent-of-revenue rules plus the variant's
+ * revenue-based blocks plus its gross-price blocks × gross/net; c =
+ * percent-of-cost and loss rates; fixed = per-unit + per-order ÷ basket +
+ * per-day × days held) and requiring `netProfit = m · netRev`:
  *
  *   netRev · (1 − r − m) = landed · (1 + c) + fixed
  *   netRev = (landed · (1 + c) + fixed) / (1 − r − m)
  *
  * Still closed form; break-even is `m = 0`. Returns null when the denominator
- * is zero or negative, which means the percentage-of-revenue costs plus the
- * desired margin consume 100% or more of revenue — no finite price gets there.
+ * is zero or negative, which means the price-linked costs plus the desired
+ * margin consume 100% or more of revenue — no finite price gets there.
  */
 export function solvePriceForMargin(
-  landedUnitCost: number,
+  costs: VariantCostInputs,
   rules: CostRule[],
   settings: MarginSettings,
   desiredMarginPct: number,
   context: MarginContext = {},
 ): number | null {
-  const r = revenueRate(rules);
+  const r =
+    revenueRate(rules) +
+    num(costs.extraRevenuePct) / 100 +
+    (num(costs.extraGrossPct) / 100) * grossPerNet(settings);
   const m = num(desiredMarginPct) / 100;
   const denominator = 1 - r - m;
   if (denominator <= 1e-9) return null;
 
   const netRevenue =
-    (landedUnitCost * (1 + costRate(rules)) + fixedCharges(rules, context)) /
+    (landedCostOf(costs) * (1 + costRate(rules)) +
+      fixedCharges(rules, context)) /
     denominator;
   if (!Number.isFinite(netRevenue) || netRevenue < 0) return null;
 
@@ -392,9 +423,8 @@ export function quoteForTargetMargin(
   targetMarginPct: number,
   context: MarginContext = {},
 ): MarginQuote | null {
-  const landedUnitCost = landedCostOf(costs);
   const price = solvePriceForMargin(
-    landedUnitCost,
+    costs,
     rules,
     settings,
     targetMarginPct,
@@ -446,6 +476,14 @@ export function calculateMargin(input: MarginInput): MarginResult {
   // percent-of-goods blocks produced it.
   const extraUnitCost = landedUnitCost - unitCost;
 
+  // Blocks measured against the price rather than the goods — a per-product
+  // royalty or listing fee. Price-linked, so they scale with the sale like a
+  // rule does, not with the shelf cost.
+  const extraPriceLinkedCost =
+    (netRevenue * num(input.costs.extraRevenuePct) +
+      grossRevenue * num(input.costs.extraGrossPct)) /
+    100;
+
   const appliedCosts: AppliedCost[] = activeRules(rules).map((rule) => ({
     id: rule.id,
     name: rule.name,
@@ -460,7 +498,7 @@ export function calculateMargin(input: MarginInput): MarginResult {
     (total, cost) => total + cost.amount,
     0,
   );
-  const totalCost = landedUnitCost + totalVariableCost;
+  const totalCost = landedUnitCost + extraPriceLinkedCost + totalVariableCost;
 
   const grossProfit = netRevenue - landedUnitCost;
   const netProfit = netRevenue - totalCost;
@@ -487,6 +525,7 @@ export function calculateMargin(input: MarginInput): MarginResult {
     unitCost: roundMoney(unitCost),
     extraUnitCost: roundMoney(extraUnitCost),
     landedUnitCost: roundMoney(landedUnitCost),
+    extraPriceLinkedCost: roundMoney(extraPriceLinkedCost),
 
     appliedCosts,
     totalVariableCost: roundMoney(totalVariableCost),
@@ -499,15 +538,9 @@ export function calculateMargin(input: MarginInput): MarginResult {
     netMarginPct: roundPct(netMarginPct),
     markupPct: roundPct(markupPct),
 
-    breakEvenPrice: solvePriceForMargin(
-      landedUnitCost,
-      rules,
-      settings,
-      0,
-      context,
-    ),
+    breakEvenPrice: solvePriceForMargin(input.costs, rules, settings, 0, context),
     targetPrice: solvePriceForMargin(
-      landedUnitCost,
+      input.costs,
       rules,
       settings,
       settings.targetMarginPct,

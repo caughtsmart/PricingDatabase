@@ -127,10 +127,13 @@ tests if done in order.
 > sales. `VariantCost` is gone: variant costs are `CostComponent` rows
 > (migrated in place, one row per non-zero column, stamped `KNOWN`), resolved
 > by `app/lib/components.ts` — including `parentId` grouping with the
-> collapse/explode rule and a cycle guard. Still open: surfacing `confidence`
-> in the UI, per-component `base` overrides (the column exists, resolution
-> assumes goods cost), and product/template scope (`variantId` is still always
-> set).
+> collapse/explode rule and a cycle guard. Confidence is surfaced (§2.5) and
+> per-component `base` overrides are honoured: a percent block declares its
+> denominator (goods cost, net revenue, or gross price), price-linked blocks
+> flow through the solver's `r` term, and the migration set every existing
+> percent row to `LANDED_COST` — what it had always meant — before the base
+> became live. Still open: product/template scope (`variantId` is still
+> always set).
 
 ### Step 1 — extend the enum
 

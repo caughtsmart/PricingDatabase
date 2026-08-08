@@ -1,4 +1,4 @@
-name = "margin-lens-web"
+name = "cogspilot-web"
 roles = ["backend", "frontend"]
 webhooks_path = "/webhooks"
 

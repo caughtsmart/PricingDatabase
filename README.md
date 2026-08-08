@@ -1,4 +1,4 @@
-# Margin Lens
+# CogsPilot
 
 A Shopify app that shows the **real** margin on every product — landed cost,
 tax, and payment fees included — as a widget on the product details page in the
@@ -6,8 +6,18 @@ admin, plus a dashboard that rolls it all up.
 
 Most margin tools compute `(price − cost) / price`. On a UK store selling at
 £120 inc VAT against a £60 cost, that reports **50%**. The actual figure is
-**40%** before you have paid a payment fee or a courier. Margin Lens exists to
+**40%** before you have paid a payment fee or a courier. CogsPilot exists to
 close that gap.
+
+---
+
+## Documentation
+
+| File | For |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | Working rules for agents and contributors: invariants, conventions, traps |
+| [`docs/MARGIN-MODEL.md`](docs/MARGIN-MODEL.md) | The cost model, where it is going, and the migration path |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | Voice, colour, the money waterfall, tactile controls, accessibility |
 
 ---
 
@@ -173,9 +183,9 @@ npm run dev                   # shopify app dev
 A local Postgres for development:
 
 ```bash
-docker run --name marginlens-db -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=marginlens -p 5432:5432 -d postgres:16
-# DATABASE_URL="postgresql://postgres:postgres@localhost:5432/marginlens?schema=public"
+docker run --name cogspilot-db -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=cogspilot -p 5432:5432 -d postgres:16
+# DATABASE_URL="postgresql://postgres:postgres@localhost:5432/cogspilot?schema=public"
 ```
 
 Then in the admin: open the app, hit **Sync catalogue**, and add the **Margin**

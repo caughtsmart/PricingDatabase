@@ -32,8 +32,8 @@ describe("storeHandleFromShopDomain", () => {
 
 describe("planSelectionUrl", () => {
   it("builds the hosted plan page from store and app handle", () => {
-    expect(planSelectionUrl("orcs-bazaar.myshopify.com", "margin-lens")).toBe(
-      "https://admin.shopify.com/store/orcs-bazaar/charges/margin-lens/pricing_plans",
+    expect(planSelectionUrl("orcs-bazaar.myshopify.com", "cogspilot")).toBe(
+      "https://admin.shopify.com/store/orcs-bazaar/charges/cogspilot/pricing_plans",
     );
   });
 });

@@ -21,7 +21,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export default function Index() {
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", padding: "3rem", maxWidth: "40rem" }}>
-      <h1>Margin Lens</h1>
+      <h1>CogsPilot</h1>
       <p>
         See the real margin on every product, including freight, duty,
         packaging and payment fees — right on the Shopify product page.

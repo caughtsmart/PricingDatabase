@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   componentsToCostInputs,
+  normaliseScopes,
   resolveComponents,
   type CostComponentInput,
 } from "./components";
@@ -157,6 +158,38 @@ describe("resolveComponents", () => {
     ]);
 
     expect(resolved.extraFixed).toBe(3);
+  });
+});
+
+describe("normaliseScopes", () => {
+  it("severs a parent link that crosses the variant/product boundary", () => {
+    // The child is orphaned to the top level, not dropped: its money must
+    // stay counted even though the nesting cannot be stored.
+    const result = normaliseScopes([
+      block({ id: "landed", kind: "GROUP", scope: "PRODUCT" }),
+      block({ id: "freight", parentId: "landed", value: 2, scope: "VARIANT" }),
+    ]);
+
+    expect(result[1].parentId).toBeNull();
+    expect(resolveComponents(result).extraFixed).toBe(2);
+  });
+
+  it("keeps a link whose ends share a scope", () => {
+    const result = normaliseScopes([
+      block({ id: "landed", kind: "GROUP", scope: "PRODUCT" }),
+      block({ id: "freight", parentId: "landed", value: 2, scope: "PRODUCT" }),
+    ]);
+
+    expect(result[1].parentId).toBe("landed");
+  });
+
+  it("treats an absent scope as VARIANT", () => {
+    const result = normaliseScopes([
+      block({ id: "landed", kind: "GROUP", scope: "VARIANT" }),
+      block({ id: "freight", parentId: "landed", value: 2 }),
+    ]);
+
+    expect(result[1].parentId).toBe("landed");
   });
 });
 

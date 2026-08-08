@@ -25,6 +25,13 @@ export type ComponentConfidence = "KNOWN" | "ESTIMATED" | "GUESSED";
  */
 export type ComponentBase = "LANDED_COST" | "NET_REVENUE" | "GROSS_PRICE";
 
+/**
+ * Who a block belongs to. VARIANT blocks live on one variant; PRODUCT blocks
+ * are shared by every variant of the product — freight that is the same
+ * across sizes gets typed once, not per variant.
+ */
+export type ComponentScope = "VARIANT" | "PRODUCT";
+
 export interface CostComponentInput {
   id: string;
   parentId?: string | null;
@@ -34,9 +41,33 @@ export interface CostComponentInput {
   value: number;
   /** Denominator for PERCENT_OF_COST blocks; defaults to the goods cost. */
   base?: ComponentBase;
+  scope?: ComponentScope;
   confidence?: ComponentConfidence;
   enabled?: boolean;
   sortOrder?: number;
+}
+
+/**
+ * Severs parent links that cross a scope boundary.
+ *
+ * A variant block nested under a product GROUP (or vice versa) cannot be
+ * persisted coherently — the two halves are stored, fetched and rewritten
+ * separately, so the link would dangle for every other variant. Orphaning
+ * the child to the top level keeps its money counted; the alternative — the
+ * cycle guard treating it as broken — would silently drop it.
+ */
+export function normaliseScopes(
+  components: CostComponentInput[],
+): CostComponentInput[] {
+  const scopeOf = new Map(
+    components.map((component) => [component.id, component.scope ?? "VARIANT"]),
+  );
+  return components.map((component) => {
+    if (!component.parentId) return component;
+    const parentScope = scopeOf.get(component.parentId);
+    if (parentScope === (component.scope ?? "VARIANT")) return component;
+    return { ...component, parentId: null };
+  });
 }
 
 export interface ResolvedComponents {

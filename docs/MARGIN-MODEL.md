@@ -132,8 +132,10 @@ tests if done in order.
 > denominator (goods cost, net revenue, or gross price), price-linked blocks
 > flow through the solver's `r` term, and the migration set every existing
 > percent row to `LANDED_COST` — what it had always meant — before the base
-> became live. Still open: product/template scope (`variantId` is still
-> always set).
+> became live. Scope is in too: a block applies to one variant or to every
+> variant of its product (`variantId` null, the widget's "Applies to"
+> selector), typed once and shared. That completes this document's roadmap;
+> a named, reusable template library across products remains future work.
 
 ### Step 1 — extend the enum
 

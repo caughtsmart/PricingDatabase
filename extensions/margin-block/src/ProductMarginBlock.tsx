@@ -23,6 +23,8 @@ type ComponentKind = "FIXED_PER_UNIT" | "PERCENT_OF_COST" | "GROUP";
 type ComponentConfidence = "KNOWN" | "ESTIMATED" | "GUESSED";
 /** What a percent block is measured against. Fixed amounts have no base. */
 type ComponentBase = "LANDED_COST" | "NET_REVENUE" | "GROSS_PRICE";
+/** Whether a block belongs to this variant alone or the whole product. */
+type ComponentScope = "VARIANT" | "PRODUCT";
 
 interface CostComponentInput {
   id: string;
@@ -32,10 +34,16 @@ interface CostComponentInput {
   /** Currency for FIXED_PER_UNIT and collapsed GROUPs; % points for PERCENT_OF_COST. */
   value: number;
   base?: ComponentBase;
+  scope?: ComponentScope;
   confidence?: ComponentConfidence;
   enabled?: boolean;
   sortOrder?: number;
 }
+
+const SCOPE_OPTIONS: Array<{ value: ComponentScope; label: string }> = [
+  { value: "VARIANT", label: "Just this variant" },
+  { value: "PRODUCT", label: "Every variant of this product" },
+];
 
 /**
  * The base said out loud (MARGIN-MODEL.md §2.3): "3%" is very different
@@ -200,6 +208,7 @@ interface DraftBlock {
   kind: ComponentKind;
   value: string;
   base: ComponentBase;
+  scope: ComponentScope;
   confidence: ComponentConfidence;
   enabled: boolean;
 }
@@ -212,6 +221,7 @@ function toDrafts(components: CostComponentInput[]): DraftBlock[] {
     kind: component.kind,
     value: String(component.value),
     base: component.base ?? "LANDED_COST",
+    scope: component.scope ?? "VARIANT",
     confidence: component.confidence ?? "ESTIMATED",
     enabled: component.enabled !== false,
   }));
@@ -232,6 +242,7 @@ function draftsToComponents(drafts: DraftBlock[]): CostComponentInput[] {
     kind: draft.kind,
     value: blockAmount(draft.value, draft.kind),
     base: draft.base,
+    scope: draft.scope,
     confidence: draft.confidence,
     enabled: draft.enabled,
     sortOrder: index,
@@ -405,6 +416,7 @@ function ProductMarginBlock() {
         kind,
         value: "0",
         base: "LANDED_COST",
+        scope: "VARIANT",
         confidence: "ESTIMATED",
         enabled: true,
       },
@@ -437,6 +449,7 @@ function ProductMarginBlock() {
           kind: nudge.kind,
           value: "0",
           base: "LANDED_COST" as const,
+          scope: "VARIANT" as const,
           confidence: "GUESSED" as const,
           enabled: true,
         };
@@ -823,12 +836,7 @@ function ProductMarginBlock() {
                       ))}
                     </s-select>
                   ) : null}
-                  <s-stack
-                    direction="inline"
-                    gap="base"
-                    justifyContent="space-between"
-                    alignItems="end"
-                  >
+                  <s-grid gridTemplateColumns="1fr 1fr" gap="small-300">
                     {/* How sure the merchant is drives the headline's
                         likely-range band — honesty is a first-class input. */}
                     <s-select
@@ -847,6 +855,31 @@ function ProductMarginBlock() {
                         </s-option>
                       ))}
                     </s-select>
+                    {/* Product-scoped blocks are typed once and shared by
+                        every variant — freight rarely differs by size. */}
+                    <s-select
+                      label="Applies to"
+                      value={block.scope}
+                      onInput={(event: Event) =>
+                        editBlock(block.id, {
+                          scope: (event.target as HTMLSelectElement)
+                            .value as ComponentScope,
+                        })
+                      }
+                    >
+                      {SCOPE_OPTIONS.map((option) => (
+                        <s-option key={option.value} value={option.value}>
+                          {option.label}
+                        </s-option>
+                      ))}
+                    </s-select>
+                  </s-grid>
+                  <s-stack
+                    direction="inline"
+                    gap="base"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
                     {/* Mute, don't delete (DESIGN.md §6): the figure stays,
                         the margin shows life without it. */}
                     <s-switch
@@ -870,6 +903,15 @@ function ProductMarginBlock() {
             ))}
           </s-stack>
         )}
+
+        {view.blocks &&
+        multiVariant &&
+        draftBlocks.some((block) => block.scope === "PRODUCT") ? (
+          <s-text color="subdued">
+            Blocks set to &ldquo;every variant&rdquo; are shared — saving here
+            updates them for the whole product.
+          </s-text>
+        ) : null}
 
         {view.blocks ? (
           <s-stack direction="inline" gap="small-300">

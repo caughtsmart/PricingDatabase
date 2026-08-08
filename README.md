@@ -18,6 +18,7 @@ close that gap.
 | [`CLAUDE.md`](CLAUDE.md) | Working rules for agents and contributors: invariants, conventions, traps |
 | [`docs/MARGIN-MODEL.md`](docs/MARGIN-MODEL.md) | The cost model, where it is going, and the migration path |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Voice, colour, the money waterfall, tactile controls, accessibility |
+| [`docs/APP-STORE.md`](docs/APP-STORE.md) | App Store submission: listing copy, assets, review checklist, pre-flight |
 
 ---
 

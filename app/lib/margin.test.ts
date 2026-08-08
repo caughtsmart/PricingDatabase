@@ -4,6 +4,7 @@ import {
   aggregate,
   calculateMargin,
   daysHeldEstimate,
+  quoteForTargetMargin,
   roundMoney,
   solvePriceForMargin,
   toNetRevenue,
@@ -493,6 +494,34 @@ describe("break-even and target pricing", () => {
     };
 
     expect(solvePriceForMargin(50, [greedy], ukSettings, 35)).toBeNull();
+  });
+
+  it("quoteForTargetMargin returns a price whose breakdown lands on target", () => {
+    const quote = quoteForTargetMargin(
+      { unitCost: 60, freight: 4 },
+      [paymentFee, pickPack],
+      ukSettings,
+      35,
+      { unitsPerOrder: 2 },
+    );
+
+    expect(quote).not.toBeNull();
+    expect(quote!.result.netMarginPct).toBeCloseTo(35, 1);
+    // The quote's own breakdown is at the quoted price — one call, no drift.
+    expect(quote!.result.grossRevenue).toBe(quote!.price);
+  });
+
+  it("quoteForTargetMargin returns null for an unreachable margin", () => {
+    const greedy: CostRule = {
+      id: "greedy",
+      name: "Impossible fee",
+      kind: "PERCENT_OF_REVENUE",
+      value: 80,
+      enabled: true,
+    };
+    expect(
+      quoteForTargetMargin({ unitCost: 50 }, [greedy], ukSettings, 35),
+    ).toBeNull();
   });
 
   it("re-applies VAT so the suggested price is customer-facing", () => {

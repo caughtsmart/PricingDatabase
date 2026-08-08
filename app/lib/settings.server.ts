@@ -117,13 +117,18 @@ export async function getShopConfig(shop: string): Promise<ShopConfig> {
       warnMarginPct: toNumber(record.warnMarginPct),
       criticalMarginPct: toNumber(record.criticalMarginPct),
     },
-    rules: record.costRules.map((rule) => ({
-      id: rule.id,
-      name: rule.name,
-      kind: rule.kind,
-      value: toNumber(rule.value),
-      enabled: rule.enabled,
-    })),
+    rules: record.costRules
+      // GROUP lives in the shared DB enum for CostComponent's sake; a shop
+      // rule carrying it would have no defined amount, so it is dropped here
+      // rather than fed to the engine. Nothing writes one — this is a guard.
+      .filter((rule) => rule.kind !== "GROUP")
+      .map((rule) => ({
+        id: rule.id,
+        name: rule.name,
+        kind: rule.kind as CostRule["kind"],
+        value: toNumber(rule.value),
+        enabled: rule.enabled,
+      })),
   };
 }
 

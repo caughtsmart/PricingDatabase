@@ -28,7 +28,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const purged = await purgeShopData(shop);
     await completeComplianceRequest(
       record.id,
-      `Purged ${purged.total} rows: ${purged.variantCosts} variant costs, ` +
+      `Purged ${purged.total} rows: ${purged.costComponents} cost blocks, ` +
         `${purged.variantSnapshots} snapshots, ${purged.costRules} cost rules, ` +
         `${purged.syncRuns} sync runs, ${purged.shopSettings} settings, ` +
         `${purged.sessions} sessions.`,

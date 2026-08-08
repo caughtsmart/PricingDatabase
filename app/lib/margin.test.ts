@@ -100,17 +100,10 @@ describe("calculateMargin", () => {
     expect(result.netMarginPct).toBe(40);
   });
 
-  it("folds per-variant extras into landed cost", () => {
+  it("folds fixed cost blocks into landed cost", () => {
     const result = calculateMargin({
       price: 120,
-      costs: {
-        unitCost: 60,
-        freight: 5,
-        duty: 2.5,
-        packaging: 1,
-        handling: 0.5,
-        other: 1,
-      },
+      costs: { unitCost: 60, extraFixed: 10 },
       rules: noRules,
       settings: ukSettings,
     });
@@ -119,6 +112,32 @@ describe("calculateMargin", () => {
     expect(result.landedUnitCost).toBe(70);
     expect(result.grossProfit).toBe(30);
     expect(result.netMarginPct).toBe(30);
+  });
+
+  it("applies percent-of-goods blocks to unit cost plus fixed extras", () => {
+    // Duty at variant level: 5% of (£60 + £4) = £3.20, landed £67.20 — the
+    // customs-value semantics, not a percentage of the finished landed cost.
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60, extraFixed: 4, extraCostPct: 5 },
+      rules: noRules,
+      settings: ukSettings,
+    });
+
+    expect(result.landedUnitCost).toBe(67.2);
+    expect(result.extraUnitCost).toBe(7.2);
+  });
+
+  it("clamps a percent-of-goods rate below -100% to a free landed cost", () => {
+    const result = calculateMargin({
+      price: 120,
+      costs: { unitCost: 60, extraCostPct: -150 },
+      rules: noRules,
+      settings: ukSettings,
+    });
+
+    expect(result.landedUnitCost).toBe(0);
+    expect(Number.isFinite(result.netMarginPct)).toBe(true);
   });
 
   it("applies percentage and fixed shop-wide rules", () => {
@@ -378,7 +397,7 @@ describe("daysHeldEstimate", () => {
 describe("break-even and target pricing", () => {
   it("break-even price yields exactly zero net profit when fed back in", () => {
     const rules = [paymentFee, pickPack];
-    const costs = { unitCost: 60, freight: 4 };
+    const costs = { unitCost: 60, extraFixed: 4 };
 
     const first = calculateMargin({
       price: 120,
@@ -402,7 +421,7 @@ describe("break-even and target pricing", () => {
 
   it("target price yields the configured target margin when fed back in", () => {
     const rules = [paymentFee, pickPack];
-    const costs = { unitCost: 60, freight: 4 };
+    const costs = { unitCost: 60, extraFixed: 4 };
 
     const first = calculateMargin({
       price: 120,
@@ -437,7 +456,7 @@ describe("break-even and target pricing", () => {
       { id: "ship", name: "Courier", kind: "FIXED_PER_ORDER", value: 3.99, enabled: true },
       { id: "hold", name: "Storage", kind: "PER_DAY_HELD", value: 0.02, enabled: true },
     ];
-    const costs = { unitCost: 60, freight: 4 };
+    const costs = { unitCost: 60, extraFixed: 4 };
     const context = { unitsPerOrder: 2.2, daysHeld: 48 };
 
     const first = calculateMargin({
@@ -498,7 +517,7 @@ describe("break-even and target pricing", () => {
 
   it("quoteForTargetMargin returns a price whose breakdown lands on target", () => {
     const quote = quoteForTargetMargin(
-      { unitCost: 60, freight: 4 },
+      { unitCost: 60, extraFixed: 4 },
       [paymentFee, pickPack],
       ukSettings,
       35,

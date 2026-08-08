@@ -1,5 +1,6 @@
 import prisma from "../db.server";
-import { EMPTY_EXTRAS, getVariantExtrasMap, toCostInputs } from "./costs.server";
+import { componentsToCostInputs } from "./components";
+import { getComponentsMap } from "./costs.server";
 import {
   aggregate,
   calculateMargin,
@@ -54,13 +55,13 @@ export async function buildRollup(shop: string): Promise<Rollup> {
     }),
   ]);
 
-  const extrasMap = await getVariantExtrasMap(
+  const componentsMap = await getComponentsMap(
     shop,
     snapshots.map((snapshot) => snapshot.variantId),
   );
 
   const lines: RollupLine[] = snapshots.map((snapshot) => {
-    const extras = extrasMap.get(snapshot.variantId) ?? { ...EMPTY_EXTRAS };
+    const components = componentsMap.get(snapshot.variantId) ?? [];
     const price = toNumber(snapshot.price);
 
     return {
@@ -79,7 +80,10 @@ export async function buildRollup(shop: string): Promise<Rollup> {
       margin: calculateMargin({
         price,
         compareAtPrice: toNullableNumber(snapshot.compareAtPrice),
-        costs: toCostInputs(toNullableNumber(snapshot.unitCost), extras),
+        costs: componentsToCostInputs(
+          toNullableNumber(snapshot.unitCost),
+          components,
+        ),
         rules: config.rules,
         settings: config.settings,
         context: {

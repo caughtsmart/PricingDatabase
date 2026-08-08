@@ -101,15 +101,34 @@ export function daysHeldEstimate(
   return Math.min(capDays, stock / (sold / windowDays));
 }
 
-/** Per-variant cost components that sit on top of Shopify's unit cost. */
+/**
+ * Per-variant cost inputs, resolved from the variant's cost blocks.
+ *
+ * The engine deliberately takes two totals rather than the block tree itself:
+ * `componentsToCostInputs` (components.ts) owns the tree rules, and the engine
+ * stays a pure function of numbers. Landed cost is
+ *
+ *   (unitCost + extraFixed) × (1 + extraCostPct / 100)
+ *
+ * — percent-of-goods blocks (duty, FX spread) apply to the goods value, i.e.
+ * unit cost plus the fixed extras, which is how customs actually charges.
+ */
 export interface VariantCostInputs {
   /** Shopify's `InventoryItem.unitCost` ("Cost per item"). Null when unset. */
   unitCost: number | null;
-  freight?: number | null;
-  duty?: number | null;
-  packaging?: number | null;
-  handling?: number | null;
-  other?: number | null;
+  /** Σ flat per-unit cost blocks (freight, packaging, handling…). */
+  extraFixed?: number | null;
+  /** Σ percent-of-goods block rates (duty, FX…), in percentage points. */
+  extraCostPct?: number | null;
+}
+
+/** The landed unit cost implied by a set of cost inputs. */
+export function landedCostOf(costs: VariantCostInputs): number {
+  const goods = num(costs.unitCost) + num(costs.extraFixed);
+  const rate = num(costs.extraCostPct);
+  // A rate at or below -100% would zero or flip the goods value; clamp to
+  // "free" rather than letting a typo produce a negative landed cost.
+  return goods * Math.max(0, 1 + rate / 100);
 }
 
 export interface MarginSettings {
@@ -162,7 +181,7 @@ export interface MarginResult {
   taxAmount: number;
 
   unitCost: number;
-  /** Sum of the per-variant extras (freight, duty, packaging, handling, other). */
+  /** What the variant's cost blocks add on top of the unit cost. */
   extraUnitCost: number;
   /** unitCost + extraUnitCost. What the unit costs to sit on the shelf. */
   landedUnitCost: number;
@@ -232,16 +251,6 @@ function toGrossPrice(netRevenue: number, settings: MarginSettings): number {
   const rate = num(settings.taxRatePct);
   if (rate <= -100) return netRevenue;
   return netRevenue * (1 + rate / 100);
-}
-
-export function sumExtraUnitCost(costs: VariantCostInputs): number {
-  return (
-    num(costs.freight) +
-    num(costs.duty) +
-    num(costs.packaging) +
-    num(costs.handling) +
-    num(costs.other)
-  );
 }
 
 function activeRules(rules: CostRule[]): CostRule[] {
@@ -383,7 +392,7 @@ export function quoteForTargetMargin(
   targetMarginPct: number,
   context: MarginContext = {},
 ): MarginQuote | null {
-  const landedUnitCost = num(costs.unitCost) + sumExtraUnitCost(costs);
+  const landedUnitCost = landedCostOf(costs);
   const price = solvePriceForMargin(
     landedUnitCost,
     rules,
@@ -432,8 +441,10 @@ export function calculateMargin(input: MarginInput): MarginResult {
     Number.isFinite(input.costs.unitCost);
 
   const unitCost = num(input.costs.unitCost);
-  const extraUnitCost = sumExtraUnitCost(input.costs);
-  const landedUnitCost = unitCost + extraUnitCost;
+  const landedUnitCost = landedCostOf(input.costs);
+  // Everything landed beyond the bare unit cost, whatever mix of fixed and
+  // percent-of-goods blocks produced it.
+  const extraUnitCost = landedUnitCost - unitCost;
 
   const appliedCosts: AppliedCost[] = activeRules(rules).map((rule) => ({
     id: rule.id,

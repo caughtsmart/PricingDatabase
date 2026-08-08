@@ -1,6 +1,6 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
-import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 /**
  * The product details margin widget.
@@ -16,13 +16,22 @@ export default async () => {
   render(<ProductMarginBlock />, document.body);
 };
 
-interface VariantExtras {
-  freight: number;
-  duty: number;
-  packaging: number;
-  handling: number;
-  other: number;
-  notes: string | null;
+// Mirrors `CostComponentInput` in app/lib/components.ts. Declared here rather
+// than imported because the extension is a separate bundle with its own
+// tsconfig; the API payload is the contract between the two.
+type ComponentKind = "FIXED_PER_UNIT" | "PERCENT_OF_COST" | "GROUP";
+type ComponentConfidence = "KNOWN" | "ESTIMATED" | "GUESSED";
+
+interface CostComponentInput {
+  id: string;
+  parentId?: string | null;
+  label: string;
+  kind: ComponentKind;
+  /** Currency for FIXED_PER_UNIT and collapsed GROUPs; % points for PERCENT_OF_COST. */
+  value: number;
+  confidence?: ComponentConfidence;
+  enabled?: boolean;
+  sortOrder?: number;
 }
 
 type CostRuleKind =
@@ -90,7 +99,7 @@ interface VariantPayload {
   sku: string | null;
   price: number;
   inventoryQuantity: number;
-  extras: VariantExtras;
+  components: CostComponentInput[];
   margin: MarginResult;
   waterfall: Waterfall;
 }
@@ -104,15 +113,52 @@ interface MarginApiPayload {
   appliedRuleNames: string[];
 }
 
-const EXTRA_FIELDS = [
-  { key: "freight", label: "Freight" },
-  { key: "duty", label: "Duty" },
-  { key: "packaging", label: "Packaging" },
-  { key: "handling", label: "Handling" },
-  { key: "other", label: "Other" },
-] as const;
+/**
+ * A cost block as it sits in the form: the value stays a string while the
+ * merchant types, and everything else round-trips untouched so a save cannot
+ * flatten structure (parent links, confidence) the widget does not edit.
+ */
+interface DraftBlock {
+  id: string;
+  parentId: string | null;
+  label: string;
+  kind: ComponentKind;
+  value: string;
+  confidence: ComponentConfidence;
+  enabled: boolean;
+}
 
-type ExtraKey = (typeof EXTRA_FIELDS)[number]["key"];
+function toDrafts(components: CostComponentInput[]): DraftBlock[] {
+  return components.map((component) => ({
+    id: component.id,
+    parentId: component.parentId ?? null,
+    label: component.label,
+    kind: component.kind,
+    value: String(component.value),
+    confidence: component.confidence ?? "ESTIMATED",
+    enabled: component.enabled !== false,
+  }));
+}
+
+/** Mirrors the server's sanitiser: percentages may be negative, money may not. */
+function blockAmount(value: string, kind: ComponentKind): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return kind === "PERCENT_OF_COST" ? parsed : Math.max(0, parsed);
+}
+
+function draftsToComponents(drafts: DraftBlock[]): CostComponentInput[] {
+  return drafts.map((draft, index) => ({
+    id: draft.id,
+    parentId: draft.parentId,
+    label: draft.label.trim() || "Cost",
+    kind: draft.kind,
+    value: blockAmount(draft.value, draft.kind),
+    confidence: draft.confidence,
+    enabled: draft.enabled,
+    sortOrder: index,
+  }));
+}
 
 function statusTone(status: MarginStatus) {
   switch (status) {
@@ -168,14 +214,11 @@ function ProductMarginBlock() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draftExtras, setDraftExtras] = useState<Record<ExtraKey, string>>({
-    freight: "0",
-    duty: "0",
-    packaging: "0",
-    handling: "0",
-    other: "0",
-  });
+  const [draftBlocks, setDraftBlocks] = useState<DraftBlock[]>([]);
   const [draftUnitCost, setDraftUnitCost] = useState("0");
+  // Ids for blocks added in this session. The server regenerates ids on save,
+  // so these only need to be unique within the draft list.
+  const newBlockSeq = useRef(0);
   const [dirty, setDirty] = useState(false);
   // Block extensions have no toast API (that is App Home only), so saving is
   // confirmed inline instead.
@@ -226,16 +269,56 @@ function ProductMarginBlock() {
   // from one variant onto another.
   useEffect(() => {
     if (!selected) return;
-    setDraftExtras({
-      freight: String(selected.extras.freight),
-      duty: String(selected.extras.duty),
-      packaging: String(selected.extras.packaging),
-      handling: String(selected.extras.handling),
-      other: String(selected.extras.other),
-    });
+    setDraftBlocks(toDrafts(selected.components));
     setDraftUnitCost(String(selected.margin.unitCost));
     setDirty(false);
   }, [selected?.variantId]);
+
+  // The blocks as the server will read them, rebuilt only when a draft edit
+  // actually happens — SolvePanel keys its debounce off this.
+  const draftComponents = useMemo(
+    () => draftsToComponents(draftBlocks),
+    [draftBlocks],
+  );
+
+  const editBlock = useCallback(
+    (id: string, patch: Partial<DraftBlock>) => {
+      setDraftBlocks((current) =>
+        current.map((block) =>
+          block.id === id ? { ...block, ...patch } : block,
+        ),
+      );
+      setDirty(true);
+      setSaved(false);
+    },
+    [],
+  );
+
+  const addBlock = useCallback((kind: ComponentKind) => {
+    newBlockSeq.current += 1;
+    setDraftBlocks((current) => [
+      ...current,
+      {
+        id: `new-${newBlockSeq.current}`,
+        parentId: null,
+        label: "",
+        kind,
+        value: "0",
+        confidence: "ESTIMATED",
+        enabled: true,
+      },
+    ]);
+    setDirty(true);
+    setSaved(false);
+  }, []);
+
+  // Saved blocks are muted, never deleted (DESIGN.md §6) — but a block added
+  // by mistake and not yet saved can simply be taken back.
+  const removeUnsavedBlock = useCallback((id: string) => {
+    setDraftBlocks((current) => current.filter((block) => block.id !== id));
+    setDirty(true);
+    setSaved(false);
+  }, []);
 
   const save = useCallback(async () => {
     if (!selected || !payload) return;
@@ -252,13 +335,7 @@ function ProductMarginBlock() {
           inventoryItemId: selected.inventoryItemId,
           unitCost: toAmount(draftUnitCost),
           price: selected.price,
-          extras: {
-            freight: toAmount(draftExtras.freight),
-            duty: toAmount(draftExtras.duty),
-            packaging: toAmount(draftExtras.packaging),
-            handling: toAmount(draftExtras.handling),
-            other: toAmount(draftExtras.other),
-          },
+          components: draftComponents,
         }),
       });
 
@@ -284,7 +361,7 @@ function ProductMarginBlock() {
     } finally {
       setSaving(false);
     }
-  }, [selected, payload, draftExtras, draftUnitCost, load]);
+  }, [selected, payload, draftComponents, draftUnitCost, load]);
 
   if (loading) {
     return (
@@ -319,6 +396,18 @@ function ProductMarginBlock() {
   const currency = payload.currencyCode;
   const fmt = (value: number) => money(value, currency);
   const multiVariant = payload.variants.length > 1;
+
+  // Name the extra-cost line after the blocks that make it up, so the walk
+  // reads "Freight, Duty" rather than a generic bucket.
+  const savedBlockLabels = selected.components
+    .filter((component) => component.enabled !== false)
+    .map((component) => component.label);
+  const extraCostLabel =
+    savedBlockLabels.length === 0
+      ? "Extra costs"
+      : savedBlockLabels.length > 3
+        ? `${savedBlockLabels.slice(0, 3).join(", ")} +${savedBlockLabels.length - 3} more`
+        : savedBlockLabels.join(", ");
 
   return (
     <s-admin-block heading="Margin">
@@ -389,7 +478,7 @@ function ProductMarginBlock() {
             <Row label="Unit cost" value={`− ${fmt(margin.unitCost)}`} subdued />
             {margin.extraUnitCost > 0 ? (
               <Row
-                label="Freight, duty, packaging, handling"
+                label={extraCostLabel}
                 value={`− ${fmt(margin.extraUnitCost)}`}
                 subdued
               />
@@ -442,21 +531,98 @@ function ProductMarginBlock() {
             setSaved(false);
           }}
         />
-        <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-          {EXTRA_FIELDS.map((field) => (
-            <s-money-field
-              key={field.key}
-              label={field.label}
-              value={draftExtras[field.key]}
-              onInput={(event: Event) => {
-                const next = (event.target as HTMLInputElement).value;
-                setDraftExtras((current) => ({ ...current, [field.key]: next }));
-                setDirty(true);
-                setSaved(false);
-              }}
-            />
-          ))}
-        </s-grid>
+        {draftBlocks.length === 0 ? (
+          <s-text color="subdued">
+            No extra costs yet. Add what it takes to get this on the shelf —
+            freight, duty, packaging — so the margin above is the real one.
+          </s-text>
+        ) : (
+          <s-stack direction="block" gap="small-300">
+            {draftBlocks.map((block) => (
+              <s-box
+                key={block.id}
+                padding="small-300"
+                borderWidth="base"
+                borderRadius="base"
+              >
+                <s-stack direction="block" gap="small-400">
+                  <s-grid gridTemplateColumns="1fr 1fr" gap="small-300">
+                    <s-text-field
+                      label="Cost"
+                      placeholder="e.g. Freight"
+                      value={block.label}
+                      onInput={(event: Event) =>
+                        editBlock(block.id, {
+                          label: (event.target as HTMLInputElement).value,
+                        })
+                      }
+                    />
+                    {block.kind === "PERCENT_OF_COST" ? (
+                      <s-number-field
+                        label="Rate (% of goods cost)"
+                        suffix="%"
+                        step={0.1}
+                        value={block.value}
+                        onInput={(event: Event) =>
+                          editBlock(block.id, {
+                            value: (event.target as HTMLInputElement).value,
+                          })
+                        }
+                      />
+                    ) : (
+                      <s-money-field
+                        label={
+                          block.kind === "GROUP"
+                            ? "Amount (whole group)"
+                            : "Amount per unit"
+                        }
+                        value={block.value}
+                        onInput={(event: Event) =>
+                          editBlock(block.id, {
+                            value: (event.target as HTMLInputElement).value,
+                          })
+                        }
+                      />
+                    )}
+                  </s-grid>
+                  <s-stack
+                    direction="inline"
+                    gap="base"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
+                    {/* Mute, don't delete (DESIGN.md §6): the figure stays,
+                        the margin shows life without it. */}
+                    <s-switch
+                      label={block.enabled ? "Counted" : "Muted"}
+                      checked={block.enabled}
+                      onChange={() =>
+                        editBlock(block.id, { enabled: !block.enabled })
+                      }
+                    />
+                    {block.id.startsWith("new-") ? (
+                      <s-button
+                        variant="tertiary"
+                        onClick={() => removeUnsavedBlock(block.id)}
+                      >
+                        Remove
+                      </s-button>
+                    ) : null}
+                  </s-stack>
+                </s-stack>
+              </s-box>
+            ))}
+          </s-stack>
+        )}
+
+        <s-stack direction="inline" gap="small-300">
+          <s-button variant="secondary" onClick={() => addBlock("FIXED_PER_UNIT")}>
+            Add a cost per unit
+          </s-button>
+          <s-button variant="secondary" onClick={() => addBlock("PERCENT_OF_COST")}>
+            Add a % of goods cost
+          </s-button>
+        </s-stack>
 
         {payload.appliedRuleNames.length > 0 ? (
           <s-text color="subdued">
@@ -488,13 +654,7 @@ function ProductMarginBlock() {
           productId={payload.productId}
           currentPrice={selected.price}
           unitCost={toAmount(draftUnitCost)}
-          extras={{
-            freight: toAmount(draftExtras.freight),
-            duty: toAmount(draftExtras.duty),
-            packaging: toAmount(draftExtras.packaging),
-            handling: toAmount(draftExtras.handling),
-            other: toAmount(draftExtras.other),
-          }}
+          components={draftComponents}
           defaultTargetPct={payload.targetMarginPct}
           fmt={fmt}
           onPriceApplied={() => void load()}
@@ -523,7 +683,7 @@ function SolvePanel({
   productId,
   currentPrice,
   unitCost,
-  extras,
+  components,
   defaultTargetPct,
   fmt,
   onPriceApplied,
@@ -532,7 +692,7 @@ function SolvePanel({
   productId: string;
   currentPrice: number;
   unitCost: number;
-  extras: Record<ExtraKey, number>;
+  components: CostComponentInput[];
   defaultTargetPct: number;
   fmt: (value: number) => string;
   onPriceApplied: () => void;
@@ -548,6 +708,10 @@ function SolvePanel({
   const [applied, setApplied] = useState(false);
 
   const hasCost = unitCost > 0;
+
+  // A stable fingerprint of the draft blocks, so the debounce below re-fires
+  // on a real edit but not on every render's fresh array identity.
+  const componentsJson = JSON.stringify(components);
 
   // Re-solve, debounced, whenever the target or the draft costs move. Each
   // solve is a server round trip; the debounce keeps typing from becoming a
@@ -579,7 +743,7 @@ function SolvePanel({
           variantId,
           productId,
           unitCost,
-          extras,
+          components,
           targetMarginPct: target,
         }),
       })
@@ -601,7 +765,7 @@ function SolvePanel({
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetPct, unitCost, extras.freight, extras.duty, extras.packaging, extras.handling, extras.other]);
+  }, [targetPct, unitCost, componentsJson]);
 
   async function applyPrice(price: number) {
     setApplying(true);

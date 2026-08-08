@@ -103,7 +103,32 @@ interface VariantPayload {
   margin: MarginResult;
   waterfall: Waterfall;
   hiddenCostSummary: string | null;
+  band: ConfidenceBand | null;
+  tighten: TightenSuggestion[];
 }
+
+/** Margin range implied by estimated/guessed blocks; null when all certain. */
+interface ConfidenceBand {
+  lowPct: number;
+  highPct: number;
+}
+
+/** A block whose uncertainty is costing margin certainty, with its span. */
+interface TightenSuggestion {
+  id: string;
+  label: string;
+  confidence: ComponentConfidence;
+  swingPts: number;
+}
+
+const CONFIDENCE_OPTIONS: Array<{
+  value: ComponentConfidence;
+  label: string;
+}> = [
+  { value: "KNOWN", label: "Known — from an invoice" },
+  { value: "ESTIMATED", label: "Estimated" },
+  { value: "GUESSED", label: "Guessed" },
+];
 
 /**
  * Which parts of the widget the shop's disclosure level shows. Resolved on
@@ -551,6 +576,16 @@ function ProductMarginBlock() {
           </s-text>
         ) : null}
 
+        {/* A margin built on guesses is a range, not gospel — say so at
+            every level, right under the number it qualifies. */}
+        {selected.band ? (
+          <s-text color="subdued">
+            Likely between {percent(selected.band.lowPct)} and{" "}
+            {percent(selected.band.highPct)} — some of these costs are
+            estimates or guesses.
+          </s-text>
+        ) : null}
+
         {/* Level 1 trades the walk for one plain sentence. */}
         {!view.walk && sentence ? <s-text>{sentence}</s-text> : null}
 
@@ -744,8 +779,26 @@ function ProductMarginBlock() {
                     direction="inline"
                     gap="base"
                     justifyContent="space-between"
-                    alignItems="center"
+                    alignItems="end"
                   >
+                    {/* How sure the merchant is drives the headline's
+                        likely-range band — honesty is a first-class input. */}
+                    <s-select
+                      label="How sure?"
+                      value={block.confidence}
+                      onInput={(event: Event) =>
+                        editBlock(block.id, {
+                          confidence: (event.target as HTMLSelectElement)
+                            .value as ComponentConfidence,
+                        })
+                      }
+                    >
+                      {CONFIDENCE_OPTIONS.map((option) => (
+                        <s-option key={option.value} value={option.value}>
+                          {option.label}
+                        </s-option>
+                      ))}
+                    </s-select>
                     {/* Mute, don't delete (DESIGN.md §6): the figure stays,
                         the margin shows life without it. */}
                     <s-switch
@@ -779,6 +832,27 @@ function ProductMarginBlock() {
               Add a % of goods cost
             </s-button>
           </s-stack>
+        ) : null}
+
+        {/* The ranked cost of uncertainty: which guess to chase first. */}
+        {view.blocks && selected.tighten.length > 0 ? (
+          <s-box padding="base" borderWidth="base" borderRadius="base">
+            <s-stack direction="block" gap="small-400">
+              <s-text type="strong">Tighten this up</s-text>
+              <s-text color="subdued">
+                These figures move your margin the most for how unsure they
+                are. Swap them for invoice numbers and the range narrows.
+              </s-text>
+              {selected.tighten.map((suggestion) => (
+                <Row
+                  key={suggestion.id}
+                  label={`${suggestion.label} (${suggestion.confidence.toLowerCase()})`}
+                  value={`±${(suggestion.swingPts / 2).toFixed(1)} pts`}
+                  subdued
+                />
+              ))}
+            </s-stack>
+          </s-box>
         ) : null}
 
         {view.blocks && payload.appliedRuleNames.length > 0 ? (

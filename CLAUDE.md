@@ -136,8 +136,11 @@ guard are unit-tested there). Read it before touching `CostComponent`,
 `CostRule` or `solvePriceForMargin`. The §4 disclosure levels are also in:
 `app/lib/disclosure.ts` (pure again) resolves a shop's level into view flags
 the widget renders — levels hide working, never money, and the monotonicity
-test enforces "moving up never hides". Still open, per the doc: confidence in
-the UI, per-component `base` overrides, and product/template scope.
+test enforces "moving up never hides". §2.5 confidence is in too:
+`app/lib/confidence.ts` (pure) turns each block's KNOWN/ESTIMATED/GUESSED tag
+into the headline's "likely X–Y%" band and the ranked "tighten this up" list.
+Still open, per the doc: per-component `base` overrides and product/template
+scope.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding
 any UI.

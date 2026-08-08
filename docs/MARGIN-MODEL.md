@@ -100,6 +100,13 @@ Workshop at 35% trade and a TCG distributor at 12% stop sharing one rule set.
 
 ### 2.5 Confidence
 
+> **Status:** shipped. Every block carries a "How sure?" tag; the band
+> arithmetic lives in `app/lib/confidence.ts` (pure — KNOWN moves nothing,
+> ESTIMATED spans ±20% of the value, GUESSED ±50%), the widget headline
+> shows "likely X–Y%" whenever the band is real, and the ranked list is the
+> "Tighten this up" card. Shopify's unit cost and shop-wide rules carry no
+> tag yet and are treated as exact.
+
 Tag each value `KNOWN | ESTIMATED | GUESSED`. It drives:
 
 - A band on the headline figure — *"31% margin, likely 26–36%"*

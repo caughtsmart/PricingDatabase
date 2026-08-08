@@ -54,6 +54,13 @@ model ShopSettings {
   /// over a merchant who has deliberately deleted them.
   defaultsSeeded Boolean @default(false)
 
+  /// Progressive disclosure level (MARGIN-MODEL.md §4): 1 "Am I losing
+  /// money?", 2 "The real number", 3 "Full unit economics". Controls what the
+  /// widget shows by default, never what exists — hidden costs still count.
+  /// New installs start at 1; the migration set existing shops to 3 so nobody
+  /// opened the app one morning to find their detail gone.
+  disclosureLevel Int @default(1)
+
   /// Whether the nightly background sync runs for this shop. The hour it runs
   /// at is derived from the shop domain rather than stored — see autosync.ts.
   autoSyncEnabled Boolean @default(true)

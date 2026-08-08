@@ -200,6 +200,15 @@ transition so the widget and the existing tests stay green, then delete it.
 
 ## 4. Progressive disclosure
 
+> **Status:** shipped. The level lives in `ShopSettings.disclosureLevel`
+> (new installs start at 1; shops that predate levels were set to 3 so no
+> detail vanished on upgrade), the visibility rules live in
+> `app/lib/disclosure.ts` — pure, with a monotonicity test enforcing
+> "moving up never hides" — and the widget renders server-resolved view
+> flags. Hidden costs still count and say so via a chip with a temporary
+> "show everything" peek. The level-1 nudge adds Postage, Packaging and
+> Returns-allowance blocks at zero value, labelled but never guessed.
+
 The block model only helps if the UI does not show all of it at once. Three
 levels; the level controls **default visibility**, never what exists underneath.
 

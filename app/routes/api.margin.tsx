@@ -25,6 +25,12 @@ import {
   type MarginResult,
 } from "../lib/margin";
 import {
+  confidenceBand,
+  tightenSuggestions,
+  type ConfidenceBand,
+  type TightenSuggestion,
+} from "../lib/confidence";
+import {
   hiddenCostSummary,
   NUDGE_BLOCKS,
   viewForLevel,
@@ -62,6 +68,10 @@ export interface VariantMarginPayload {
   waterfall: Waterfall;
   /** Chip text when costs are folded away at this level; null when none are. */
   hiddenCostSummary: string | null;
+  /** Margin range implied by estimated/guessed blocks; null when all certain. */
+  band: ConfidenceBand | null;
+  /** Blocks whose uncertainty costs the most margin certainty, worst first. */
+  tighten: TightenSuggestion[];
 }
 
 export interface MarginApiPayload {
@@ -142,24 +152,37 @@ export async function loader({ request }: LoaderFunctionArgs) {
     variants: product.variants.map((variant) => {
       const numericId = toNumericId(variant.id);
       const components = componentsMap.get(numericId) ?? [];
+      const context = {
+        unitsPerOrder: config.avgUnitsPerOrder,
+        // No snapshot yet (never synced) → 0 days: holding rules stay
+        // silent rather than guessing.
+        daysHeld: unitsSoldByVariant.has(numericId)
+          ? daysHeldEstimate(
+              variant.inventoryQuantity,
+              unitsSoldByVariant.get(numericId) ?? 0,
+            )
+          : 0,
+      };
       const margin = calculateMargin({
         price: variant.price,
         compareAtPrice: variant.compareAtPrice,
         costs: componentsToCostInputs(variant.unitCost, components),
         rules: config.rules,
         settings: config.settings,
-        context: {
-          unitsPerOrder: config.avgUnitsPerOrder,
-          // No snapshot yet (never synced) → 0 days: holding rules stay
-          // silent rather than guessing.
-          daysHeld: unitsSoldByVariant.has(numericId)
-            ? daysHeldEstimate(
-                variant.inventoryQuantity,
-                unitsSoldByVariant.get(numericId) ?? 0,
-              )
-            : 0,
-        },
+        context,
       });
+      // The confidence band and tighten list run the same engine at the
+      // uncertain blocks' bounds — computed here so the widget renders a
+      // range it never has to derive.
+      const bandInput = {
+        price: variant.price,
+        compareAtPrice: variant.compareAtPrice,
+        unitCost: variant.unitCost,
+        components,
+        rules: config.rules,
+        settings: config.settings,
+        context,
+      };
       return {
         variantId: variant.id,
         inventoryItemId: variant.inventoryItemId,
@@ -175,6 +198,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
           components.filter((component) => component.enabled !== false).length,
           margin.appliedCosts.length,
         ),
+        band: confidenceBand(bandInput),
+        tighten: tightenSuggestions(bandInput),
       };
     }),
   };

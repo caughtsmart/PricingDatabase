@@ -38,6 +38,9 @@ close that gap.
 - Three detail levels, chosen in settings: one honest number, the working,
   or full unit economics. A simpler level hides detail, never money — folded
   costs are announced with a tap-to-peek chip
+- Honest uncertainty: mark each cost block known, estimated or guessed and
+  the headline becomes a range — "34%, likely 29–39%" — with a "tighten
+  this up" list showing which guess is costing the most certainty
 
 **In the app** (App Home)
 

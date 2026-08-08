@@ -144,8 +144,10 @@ is measured against the goods cost, net revenue or the gross price, and the
 price-linked ones ride the solver's `r` term. Scope is live too: a block
 belongs to one variant or (via `variantId` null) to every variant of its
 product — merged server-side in `costs.server.ts`, split back by scope on
-save. The doc's roadmap is complete; a named template library across
-products remains future work.
+save. The template library completes the roadmap: `CostTemplate` rows in
+`templates.server.ts`, authored from the product page ("save these blocks
+as a template"), applied by **copying** — never linking, so editing a
+template cannot silently reprice products that used it.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding
 any UI.

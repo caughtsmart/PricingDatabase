@@ -37,6 +37,9 @@ close that gap.
   percentage of the goods cost, the revenue you keep, or the full price —
   each with a mute toggle instead of a delete button, applying to one
   variant or shared across every variant of the product
+- Named cost templates: type &ldquo;Imported from EU&rdquo; once — freight,
+  duty, FX — then apply it to any product in two taps. Applying copies the
+  blocks, so template edits never quietly change existing products
 - Three detail levels, chosen in settings: one honest number, the working,
   or full unit economics. A simpler level hides detail, never money — folded
   costs are announced with a tap-to-peek chip

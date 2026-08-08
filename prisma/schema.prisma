@@ -152,10 +152,15 @@ model CostComponent {
   id   String @id @default(cuid())
   shop String
 
-  /// Numeric portion of the Shopify GID. Nullable by design: a null variantId
-  /// is reserved for future template/scoped blocks (MARGIN-MODEL.md §2.4).
+  /// Numeric portion of the Shopify GID. A row with a variantId belongs to
+  /// that variant; variantId null with a productId is a product-scoped block
+  /// shared by every variant; both null with a templateId is a template row.
   variantId String?
   productId String?
+
+  /// Set when this row belongs to a named template rather than a live
+  /// product. Applying a template copies its rows; it does not link them.
+  templateId String?
 
   /// GROUP nesting: a block is a number *or* a formula of its children. A
   /// GROUP with children sums them; a GROUP without children acts as its own
@@ -182,6 +187,25 @@ model CostComponent {
 
   @@index([shop, variantId])
   @@index([shop, productId])
+  @@index([shop, templateId])
+}
+
+/// A named, reusable set of cost blocks — "Imported from EU" typed once and
+/// applied to any product. Its blocks are CostComponent rows carrying this
+/// template's id. Applying stamps *copies* onto the product: honest and
+/// simple — editing a template never silently reprices existing products.
+model CostTemplate {
+  id   String @id @default(cuid())
+  shop String
+  name String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Saving under an existing name overwrites that template — "update the
+  /// EU import costs" is a save, not a second template.
+  @@unique([shop, name])
+  @@index([shop])
 }
 
 /// A cached copy of catalogue facts needed for dashboard rollups.

@@ -95,7 +95,7 @@ export function sanitiseComponents(raw: unknown): CostComponentInput[] {
   return normaliseScopes(out);
 }
 
-function rowToInput(row: {
+export function rowToInput(row: {
   id: string;
   parentId: string | null;
   variantId: string | null;
@@ -151,7 +151,7 @@ export async function getComponents(
       shop,
       OR: [
         { variantId: numericVariantId },
-        { productId: numericProductId, variantId: null },
+        { productId: numericProductId, variantId: null, templateId: null },
       ],
     },
     orderBy: { sortOrder: "asc" },
@@ -176,7 +176,7 @@ export async function getComponentsMap(
       shop,
       OR: [
         { variantId: { in: variantIds } },
-        { productId: { in: productIds }, variantId: null },
+        { productId: { in: productIds }, variantId: null, templateId: null },
       ],
     },
     orderBy: { sortOrder: "asc" },
@@ -263,7 +263,7 @@ export async function saveComponents(
         shop,
         OR: [
           { variantId: numericVariantId },
-          { productId: numericProductId, variantId: null },
+          { productId: numericProductId, variantId: null, templateId: null },
         ],
       },
     }),

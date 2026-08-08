@@ -134,8 +134,11 @@ tests if done in order.
 > percent row to `LANDED_COST` — what it had always meant — before the base
 > became live. Scope is in too: a block applies to one variant or to every
 > variant of its product (`variantId` null, the widget's "Applies to"
-> selector), typed once and shared. That completes this document's roadmap;
-> a named, reusable template library across products remains future work.
+> selector), typed once and shared. And the template library rounds it off:
+> `CostTemplate` names a reusable block set ("Imported from EU"), authored
+> from any product page and applied anywhere — applying **copies** the
+> blocks, deliberately unlinked, so editing a template never silently
+> reprices a product that used it. This document's roadmap is complete.
 
 ### Step 1 — extend the enum
 

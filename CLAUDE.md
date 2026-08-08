@@ -128,11 +128,13 @@ on a module graph Node itself cannot resolve — only running it catches that.
 ## 7. Where the product is going
 
 `docs/MARGIN-MODEL.md` holds the target cost model: cost **blocks** instead of
-fixed columns, and the migration path from today's schema. Steps 1–3 are done —
-`CostRuleKind` has all six kinds and the solver is the generalised closed form.
-Read it before touching `VariantCost`, `CostRule` or `solvePriceForMargin` —
-the five-column `VariantCost` (step 4's `CostComponent` replacement) is still a
-known limitation with a planned replacement, not a design to extend.
+fixed columns, and the migration path from the original schema. All four steps
+are done — `CostRuleKind` has all six kinds, the solver is the generalised
+closed form, and variant costs are `CostComponent` rows resolved by
+`app/lib/components.ts` (pure, like the engine — the tree rules and cycle
+guard are unit-tested there). Read it before touching `CostComponent`,
+`CostRule` or `solvePriceForMargin`. Still open, per the doc: confidence in
+the UI, per-component `base` overrides, and product/template scope.
 
 `docs/DESIGN.md` holds the visual and interaction rules. Read it before adding
 any UI.

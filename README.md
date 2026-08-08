@@ -32,8 +32,9 @@ close that gap.
 - Break-even price, and the price needed to hit your target margin
 - Lock-and-solve: hold the costs still, name a margin, and the price solves
   itself — one confirmed tap then sets it on the variant
-- Editable cost fields: unit cost (written back to Shopify's own "Cost per
-  item"), plus freight, duty, packaging, handling and other
+- Editable costs: unit cost (written back to Shopify's own "Cost per item"),
+  plus cost blocks you name yourself — a flat amount per unit or a percentage
+  of the goods cost — each with a mute toggle instead of a delete button
 
 **In the app** (App Home)
 
@@ -48,7 +49,7 @@ close that gap.
 
 ```
 net revenue   = price ÷ (1 + tax rate)        # when prices include tax
-landed cost   = Shopify unit cost + freight + duty + packaging + handling + other
+landed cost   = (Shopify unit cost + Σ fixed blocks) × (1 + Σ %-of-cost blocks)
 variable cost = net revenue × Σ(% of revenue)
               + landed cost × Σ(% of cost + loss rates)
               + Σ(fixed per unit)

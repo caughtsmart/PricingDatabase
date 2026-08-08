@@ -1,14 +1,16 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import {
-  getVariantExtras,
-  getVariantExtrasMap,
-  saveVariantExtras,
-  toCostInputs,
+  getComponents,
+  getComponentsMap,
+  sanitiseComponents,
+  saveComponents,
   toNumericId,
-  EMPTY_EXTRAS,
-  type VariantExtras,
 } from "../lib/costs.server";
+import {
+  componentsToCostInputs,
+  type CostComponentInput,
+} from "../lib/components";
 import prisma from "../db.server";
 import {
   fetchProductMarginData,
@@ -47,7 +49,8 @@ export interface VariantMarginPayload {
   sku: string | null;
   price: number;
   inventoryQuantity: number;
-  extras: VariantExtras;
+  /** The variant's cost blocks, in order; the widget edits these. */
+  components: CostComponentInput[];
   margin: MarginResult;
   /** Pre-built money waterfall segments; the widget renders, never computes. */
   waterfall: Waterfall;
@@ -88,8 +91,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const variantIds = product.variants.map((variant) => variant.id);
-  const [extrasMap, snapshots] = await Promise.all([
-    getVariantExtrasMap(session.shop, variantIds),
+  const [componentsMap, snapshots] = await Promise.all([
+    getComponentsMap(session.shop, variantIds),
     // The live product query carries no sales history; the synced snapshot
     // does. Holding-cost rules need it to estimate days in stock.
     prisma.variantSnapshot.findMany({
@@ -111,11 +114,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .map((rule) => rule.name),
     variants: product.variants.map((variant) => {
       const numericId = toNumericId(variant.id);
-      const extras = extrasMap.get(numericId) ?? { ...EMPTY_EXTRAS };
+      const components = componentsMap.get(numericId) ?? [];
       const margin = calculateMargin({
         price: variant.price,
         compareAtPrice: variant.compareAtPrice,
-        costs: toCostInputs(variant.unitCost, extras),
+        costs: componentsToCostInputs(variant.unitCost, components),
         rules: config.rules,
         settings: config.settings,
         context: {
@@ -137,7 +140,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         sku: variant.sku,
         price: variant.price,
         inventoryQuantity: variant.inventoryQuantity,
-        extras,
+        components,
         margin,
         waterfall: buildWaterfall(margin),
       };
@@ -162,7 +165,8 @@ interface SavePayload {
   /** The variant's current selling price, so the response can echo a fresh margin. */
   price?: number;
   compareAtPrice?: number | null;
-  extras?: Partial<VariantExtras>;
+  /** The variant's cost blocks; sanitised server-side, never trusted. */
+  components?: unknown;
   /** For "solve": the net margin to hit, in percentage points. */
   targetMarginPct?: number;
 }
@@ -193,14 +197,7 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  const extras: VariantExtras = {
-    freight: sanitiseAmount(body.extras?.freight),
-    duty: sanitiseAmount(body.extras?.duty),
-    packaging: sanitiseAmount(body.extras?.packaging),
-    handling: sanitiseAmount(body.extras?.handling),
-    other: sanitiseAmount(body.extras?.other),
-    notes: body.extras?.notes ? String(body.extras.notes).slice(0, 500) : null,
-  };
+  const components = sanitiseComponents(body.components);
 
   const intent = body.intent ?? "save";
 
@@ -226,13 +223,13 @@ export async function action({ request }: ActionFunctionArgs) {
     ]);
 
     const quote = quoteForTargetMargin(
-      // The draft costs exactly as typed — solving persists nothing, so the
+      // The draft blocks exactly as typed — solving persists nothing, so the
       // merchant can play what-if without committing anything.
-      toCostInputs(
+      componentsToCostInputs(
         typeof body.unitCost === "number" && Number.isFinite(body.unitCost)
           ? body.unitCost
           : null,
-        extras,
+        components,
       ),
       config.rules,
       config.settings,
@@ -285,12 +282,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return cors(jsonResponse({ ok: userErrors.length === 0, userErrors }));
   }
 
-  await saveVariantExtras(
-    session.shop,
-    body.variantId,
-    body.productId,
-    extras,
-  );
+  await saveComponents(session.shop, body.variantId, body.productId, components);
 
   // Writing the unit cost back to Shopify keeps its own "Cost per item" field
   // authoritative, so reports elsewhere in the admin agree with this app.
@@ -312,8 +304,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const config = await getShopConfig(session.shop);
   // Re-read rather than trusting the request body, so the response reflects
   // exactly what was persisted.
-  const [savedExtras, snapshot] = await Promise.all([
-    getVariantExtras(session.shop, body.variantId),
+  const [savedComponents, snapshot] = await Promise.all([
+    getComponents(session.shop, body.variantId),
     prisma.variantSnapshot.findUnique({
       where: {
         shop_variantId: {
@@ -328,9 +320,9 @@ export async function action({ request }: ActionFunctionArgs) {
   const margin = calculateMargin({
     price: sanitiseAmount(body.price),
     compareAtPrice: body.compareAtPrice ?? null,
-    costs: toCostInputs(
+    costs: componentsToCostInputs(
       typeof body.unitCost === "number" ? body.unitCost : null,
-      savedExtras,
+      savedComponents,
     ),
     rules: config.rules,
     settings: config.settings,
@@ -346,7 +338,7 @@ export async function action({ request }: ActionFunctionArgs) {
     jsonResponse({
       ok: userErrors.length === 0,
       userErrors,
-      extras: savedExtras,
+      components: savedComponents,
       margin,
       waterfall: buildWaterfall(margin),
     }),

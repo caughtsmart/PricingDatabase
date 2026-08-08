@@ -1,7 +1,7 @@
 # The cost model
 
 Where the margin engine is going, and how to get it there without breaking the
-tests. Read this before changing `VariantCost`, `CostRule` or
+tests. Read this before changing `CostComponent`, `CostRule` or
 `solvePriceForMargin`.
 
 ---
@@ -10,7 +10,8 @@ tests. Read this before changing `VariantCost`, `CostRule` or
 
 Two limitations, both deliberate v1 shortcuts, both now blocking:
 
-**`VariantCost` has five fixed columns.**
+**`VariantCost` has five fixed columns.** *(Resolved — step 4 replaced it with
+`CostComponent` rows.)*
 
 ```
 freight · duty · packaging · handling · other
@@ -110,15 +111,19 @@ Tag each value `KNOWN | ESTIMATED | GUESSED`. It drives:
 Four steps, each independently shippable, none of which breaks the existing
 tests if done in order.
 
-> **Status:** steps 1–3 are shipped. All six kinds exist in `CostRuleKind`
+> **Status:** all four steps are shipped. All six kinds exist in `CostRuleKind`
 > (schema and engine), amounts resolve against their declared bases, and the
 > solver uses the generalised closed form below with its round-trip tests
 > intact. `FIXED_PER_ORDER` divides by `ShopSettings.avgUnitsPerOrder`;
 > `PER_DAY_HELD` multiplies by a per-variant days-of-cover estimate
 > (`daysHeldEstimate` in `margin.ts`) derived from synced stock and 90-day
-> sales. Step 4 — replacing `VariantCost`'s columns with `CostComponent` rows —
-> remains open, and with it grouping (`parentId`), per-rule `base` overrides,
-> `scope` and `confidence`.
+> sales. `VariantCost` is gone: variant costs are `CostComponent` rows
+> (migrated in place, one row per non-zero column, stamped `KNOWN`), resolved
+> by `app/lib/components.ts` — including `parentId` grouping with the
+> collapse/explode rule and a cycle guard. Still open: surfacing `confidence`
+> in the UI, per-component `base` overrides (the column exists, resolution
+> assumes goods cost), and product/template scope (`variantId` is still always
+> set).
 
 ### Step 1 — extend the enum
 

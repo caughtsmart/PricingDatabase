@@ -93,6 +93,24 @@ enum CostRuleKind {
   RATE_TIMES_COST
   /// A holding cost per unit per day in stock, e.g. storage, cost of capital.
   PER_DAY_HELD
+  /// A container summing its children — CostComponent only, never a CostRule.
+  GROUP
+}
+
+/// What a percentage is a percentage *of*. Explicit, never assumed: getting
+/// the base wrong is a silent 2-4% error (MARGIN-MODEL.md §2.3).
+enum CostBase {
+  NET_REVENUE
+  GROSS_PRICE
+  LANDED_COST
+}
+
+/// How much the merchant trusts a figure. Eventually drives a band on the
+/// headline margin; stored from day one so history is there when it does.
+enum Confidence {
+  KNOWN
+  ESTIMATED
+  GUESSED
 }
 
 /// Shop-wide costs that apply to every sale, on top of per-variant landed cost.
@@ -116,30 +134,44 @@ model CostRule {
   @@index([shop, enabled])
 }
 
-/// Per-variant cost components the merchant adds on top of Shopify's unit cost.
+/// A cost block (MARGIN-MODEL.md §2): one row per cost a variant carries on
+/// top of Shopify's unit cost. Replaces the old five-fixed-column
+/// `VariantCost` — the schema that was simultaneously too detailed and not
+/// detailed enough.
 ///
-/// Shopify's own `InventoryItem.unitCost` stays the source of truth for supplier
-/// price; this table only holds the extras Shopify has nowhere to put.
-model VariantCost {
+/// Shopify's own `InventoryItem.unitCost` stays the source of truth for the
+/// supplier price; these rows hold everything Shopify has nowhere to put.
+model CostComponent {
   id   String @id @default(cuid())
   shop String
 
-  /// Numeric portion of the Shopify GID, e.g. "45678901234567".
-  variantId String
-  productId String
+  /// Numeric portion of the Shopify GID. Nullable by design: a null variantId
+  /// is reserved for future template/scoped blocks (MARGIN-MODEL.md §2.4).
+  variantId String?
+  productId String?
 
-  freight   Decimal @default(0) @db.Decimal(12, 4)
-  duty      Decimal @default(0) @db.Decimal(12, 4)
-  packaging Decimal @default(0) @db.Decimal(12, 4)
-  handling  Decimal @default(0) @db.Decimal(12, 4)
-  other     Decimal @default(0) @db.Decimal(12, 4)
+  /// GROUP nesting: a block is a number *or* a formula of its children. A
+  /// GROUP with children sums them; a GROUP without children acts as its own
+  /// collapsed value. This is what lets a forensic landed-cost breakdown sit
+  /// next to a hand-waved "£1 for the rest of it".
+  parentId String?
 
-  notes String?
+  label String
+  /// Variant-level rows are constrained to FIXED_PER_UNIT, PERCENT_OF_COST
+  /// and GROUP in application code; the enum is shared with CostRule.
+  kind  CostRuleKind
+  /// Meaningful for percentage kinds; ignored for fixed amounts.
+  base  CostBase @default(NET_REVENUE)
+  value Decimal  @db.Decimal(12, 4)
+
+  confidence Confidence @default(ESTIMATED)
+  enabled    Boolean    @default(true)
+  sortOrder  Int        @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([shop, variantId])
+  @@index([shop, variantId])
   @@index([shop, productId])
 }
 
